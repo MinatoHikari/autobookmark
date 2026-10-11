@@ -2,6 +2,7 @@
 import type { TreeNodeDto } from '../../../shared/types';
 import { countBookmarks } from '../../../core/organize/scan';
 import { faviconUrl } from '../../../shared/ui';
+import { beginRowDrag, draggingId, dropHint, shouldSuppressClick } from '../../../shared/dnd';
 
 const props = defineProps<{
   nodes: TreeNodeDto[];
@@ -20,19 +21,23 @@ const emit = defineEmits<{
   createIn: [node: TreeNodeDto];
   rename: [node: TreeNodeDto];
   remove: [node: TreeNodeDto];
-  dropOn: [payload: [TreeNodeDto, string]];
 }>();
 
-function onDrop(node: TreeNodeDto, event: DragEvent) {
-  event.preventDefault();
-  event.stopPropagation();
-  const payload = event.dataTransfer?.getData('application/x-ab-node');
-  if (payload) emit('dropOn', [node, payload]);
+/** 顶层即 Chrome 根文件夹（书签栏等）：不可拖动，只接受移入 */
+const isRootLevel = () => (props.depth ?? 0) === 0;
+
+function onRowClick(node: TreeNodeDto) {
+  if (shouldSuppressClick()) return;
+  emit('select', node);
 }
 
-function onDragOver(event: DragEvent) {
-  event.preventDefault();
-  event.dataTransfer!.dropEffect = 'move';
+function hintClass(node: TreeNodeDto): string {
+  const base = draggingId.value === node.id ? 'opacity-40' : '';
+  if (dropHint.value?.id !== node.id) return base;
+  const zone = dropHint.value.zone;
+  if (zone === 'into') return 'ring-2 ring-indigo-400';
+  if (zone === 'before') return 'shadow-[inset_0_2px_0_0_#6366f1]';
+  return 'shadow-[inset_0_-2px_0_0_#6366f1]';
 }
 </script>
 
@@ -47,14 +52,18 @@ function onDragOver(event: DragEvent) {
         class="flex items-center gap-1 rounded-md px-1.5 py-[5px] cursor-pointer text-sm transition-colors"
         :class="[
           selectedId === node.id ? 'bg-indigo-100 text-indigo-800 font-medium' : 'hover:bg-slate-100',
+          hintClass(node),
         ]"
         :style="{ paddingLeft: `${(depth ?? 0) * 14 + 6}px` }"
         :title="node.url ? '双击在新标签页打开' : ''"
-        @click="emit('select', node)"
+        :data-ab-node="node.id"
+        :data-ab-type="node.url ? 'bookmark' : 'folder'"
+        :data-ab-root="isRootLevel() ? '1' : null"
+        @click="onRowClick(node)"
         @dblclick="node.url && emit('openBookmark', node)"
+        @mousedown="beginRowDrag(node, $event, isRootLevel())"
+        @dragstart.prevent
         @contextmenu.prevent.stop="emit('contextMenu', { node, x: $event.clientX, y: $event.clientY })"
-        @dragover="onDragOver"
-        @drop="onDrop(node, $event)"
       >
         <button
           v-if="!node.url && node.children.length"
@@ -116,7 +125,6 @@ function onDragOver(event: DragEvent) {
         @create-in="emit('createIn', $event)"
         @rename="emit('rename', $event)"
         @remove="emit('remove', $event)"
-        @drop-on="emit('dropOn', $event)"
       />
     </div>
   </div>

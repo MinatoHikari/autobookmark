@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, nextTick, onMounted, reactive, ref } from 'vue';
 import { browser } from 'wxt/browser';
 import { sendMessage } from '../../shared/messages';
 import { startStream } from '../../shared/stream';
 import type { BookmarkDraft, BookmarkMeta, PageContent } from '../../shared/types';
 import type { Settings } from '../../core/storage/settings';
 import { faviconUrl, formatTime, hostOf, tooltipIfTruncated } from '../../shared/ui';
+import { resolveDropTarget, setNodeDropHandler, type TreeDropEvent } from '../../shared/dnd';
+import { findNode, flattenBookmarks } from '../../core/organize/scan';
 import type { MetaBrief, SearchResultItem, TreeNodeDto } from '../../shared/types';
 import MiniTree from './components/MiniTree.vue';
 import MetaEditDialog from '../../components/MetaEditDialog.vue';
@@ -198,6 +200,50 @@ const treeQuery = ref('');
 const treeResults = ref<SearchResultItem[] | null>(null);
 let treeQueryTimer: ReturnType<typeof setTimeout> | undefined;
 
+// ---- 树展开状态持久化（storage.local，跨 popup 打关保留）----
+const TREE_EXPANDED_KEY = 'popup:treeExpanded';
+/** 恢复过持久化状态后，就不再套用「默认展开一级」 */
+let expandedRestored = false;
+
+async function restoreTreeExpanded() {
+  try {
+    const stored = (await browser.storage.local.get(TREE_EXPANDED_KEY))[TREE_EXPANDED_KEY];
+    if (Array.isArray(stored)) {
+      expandedRestored = true;
+      treeExpanded.value = new Set(stored.filter((x): x is string => typeof x === 'string'));
+    }
+  } catch {
+    /* storage 不可用时退化为会话内状态 */
+  }
+}
+
+// ---- 树滚动位置持久化（同用 storage.local）----
+const TREE_SCROLL_KEY = 'popup:treeScrollTop';
+const treeScrollEl = ref<HTMLElement | null>(null);
+let scrollSaveTimer: ReturnType<typeof setTimeout> | undefined;
+let scrollRestored = false;
+
+function onTreeScroll() {
+  if (treeResults.value) return; // 搜索结果视图的滚动不算树的位置
+  clearTimeout(scrollSaveTimer);
+  scrollSaveTimer = setTimeout(() => {
+    const top = treeScrollEl.value?.scrollTop ?? 0;
+    void browser.storage.local.set({ [TREE_SCROLL_KEY]: top }).catch(() => {});
+  }, 200);
+}
+
+/** 在树数据 + 展开状态都已恢复、DOM 渲染完成后调用，否则会被未撑开的内容钳回 0 */
+async function restoreTreeScroll() {
+  if (scrollRestored) return;
+  scrollRestored = true;
+  try {
+    const stored = (await browser.storage.local.get(TREE_SCROLL_KEY))[TREE_SCROLL_KEY];
+    if (typeof stored === 'number' && treeScrollEl.value) treeScrollEl.value.scrollTop = stored;
+  } catch {
+    /* 静默 */
+  }
+}
+
 async function loadTree(force = false) {
   if (!force && (treeNodes.value.length || treeLoading.value)) return;
   treeLoading.value = true;
@@ -205,8 +251,10 @@ async function loadTree(force = false) {
     const { tree, metaById } = await sendMessage('getBookmarksTree');
     treeNodes.value = tree;
     treeMeta.value = metaById;
-    // 默认展开一级
-    treeExpanded.value = new Set(tree.map((n) => n.id));
+    // 默认展开一级；已恢复持久化的展开状态时以恢复的为准（显式存过空集 = 全部收起）
+    if (!expandedRestored && !treeExpanded.value.size) {
+      treeExpanded.value = new Set(tree.map((n) => n.id));
+    }
   } catch (e) {
     errorMsg.value = (e as Error).message;
   } finally {
@@ -219,6 +267,7 @@ function toggleTreeNode(node: TreeNodeDto) {
   if (next.has(node.id)) next.delete(node.id);
   else next.add(node.id);
   treeExpanded.value = next;
+  void browser.storage.local.set({ [TREE_EXPANDED_KEY]: [...next] }).catch(() => {});
 }
 
 async function openBookmark(node: TreeNodeDto) {
@@ -226,6 +275,25 @@ async function openBookmark(node: TreeNodeDto) {
   await browser.tabs.create({ url: node.url });
   window.close();
 }
+
+/** 树行拖放落点：同级重排 / 跨文件夹插入 / 移入文件夹 */
+async function onTreeDrop({ targetId, zone, draggedId }: TreeDropEvent) {
+  const target = findNode(treeNodes.value, targetId);
+  if (!target) return;
+  const res = resolveDropTarget(treeNodes.value, draggedId, target, zone);
+  if (!res.ok) {
+    if (res.reason === 'invalid') showToast('不能移动到该位置');
+    return;
+  }
+  const ok = await sendMessage('moveNode', { id: draggedId, newParentId: res.parentId, index: res.index });
+  if (!ok) {
+    showToast('移动失败（可能是系统文件夹或非法目标）');
+    return;
+  }
+  await reloadTree();
+}
+
+setNodeDropHandler((e) => void onTreeDrop(e));
 
 function onTreeQueryInput() {
   clearTimeout(treeQueryTimer);
@@ -291,11 +359,11 @@ async function confirmDeleteAction() {
 }
 
 function openCtxMenu(payload: { node: TreeNodeDto; x: number; y: number }) {
-  // popup 尺寸 660x480，防止菜单溢出
+  // 防止菜单溢出（菜单约 310px 高）
   ctxMenu.value = {
     node: payload.node,
     x: Math.min(payload.x, 660 - 224),
-    y: Math.min(payload.y, 480 - 200),
+    y: Math.min(payload.y, window.innerHeight - 320),
   };
 }
 
@@ -323,6 +391,63 @@ function ctxToggle(node: TreeNodeDto) {
 function ctxOpenManager() {
   ctxMenu.value = null;
   void openManager();
+}
+
+// ---- 右键 AI 操作（书签=单条；文件夹=整棵子树，走后台任务）----
+async function ctxEnhance(node: TreeNodeDto) {
+  ctxMenu.value = null;
+  if (node.url) {
+    showToast('AI 增强中…');
+    try {
+      await sendMessage('enhanceExisting', node.id);
+      showToast('已增强');
+    } catch (e) {
+      showToast(`增强失败：${(e as Error).message}`);
+      return;
+    }
+    await reloadTree();
+    return;
+  }
+  const ids = flattenBookmarks([node], []).map((b) => b.id);
+  if (!ids.length) {
+    showToast('文件夹里没有可增强的书签');
+    return;
+  }
+  try {
+    await sendMessage('startJob', { kind: 'enhance', params: { ids, fetchContent: false } });
+    showToast(`已开始后台增强 ${ids.length} 条，可关闭窗口`);
+  } catch (e) {
+    showToast((e as Error).message);
+  }
+}
+
+async function ctxReclassify(node: TreeNodeDto) {
+  ctxMenu.value = null;
+  if (node.url) {
+    showToast('AI 挑选目录中…');
+    try {
+      const r = await sendMessage('reclassifyBookmark', node.id);
+      if (r.ok && r.folder) showToast(`已移至 ${r.folder}`);
+      else if (r.reason === 'no-candidates') showToast('没有可用的目标目录');
+      else showToast('AI 未能确定目标目录');
+    } catch (e) {
+      showToast(`分类失败：${(e as Error).message}`);
+      return;
+    }
+    await reloadTree();
+    return;
+  }
+  // 根分区（书签栏/其他书签）沿用原有 scope；普通文件夹以子树为输入
+  const isRootIdx = treeNodes.value.findIndex((r) => r.id === node.id);
+  const params: Record<string, unknown> = isRootIdx >= 0
+    ? { scope: isRootIdx === 0 ? 'toolbar' : 'other', maxCategories: 12 }
+    : { scope: 'folder', folderId: node.id, maxCategories: 12 };
+  try {
+    await sendMessage('startJob', { kind: 'classify', params });
+    showToast('已开始后台重新分类，可关闭窗口');
+  } catch (e) {
+    showToast((e as Error).message);
+  }
 }
 
 // ---- 右键编辑 ----
@@ -362,7 +487,13 @@ function openManagerSettings() {
 }
 
 onMounted(async () => {
-  void loadTree(); // 任何页面（含 chrome:// 新标签页）都加载书签树
+  // 树的启动自举：展开状态 → 树数据都就绪并渲染后，恢复上次滚动位置
+  void (async () => {
+    await Promise.all([restoreTreeExpanded(), loadTree()]);
+    await nextTick();
+    await restoreTreeScroll();
+  })();
+  void loadFolderPaths();
   void loadFolderPaths();
   try {
     const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
@@ -450,7 +581,11 @@ onMounted(async () => {
         placeholder="搜索全部书签…"
         class="shrink-0 mt-2 w-full px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-[13px] focus:outline-none focus:border-indigo-400"
       />
-      <div class="flex-1 min-h-0 overflow-y-auto mt-2 pb-1 space-y-2">
+      <div
+        ref="treeScrollEl"
+        class="flex-1 min-h-0 overflow-y-auto mt-2 pb-1 space-y-2"
+        @scroll.passive="onTreeScroll"
+      >
 
       <!-- 搜索结果（平铺） -->
       <template v-if="treeResults">
@@ -772,6 +907,19 @@ onMounted(async () => {
         </div>
 
         <div class="py-1">
+          <button
+            class="w-full flex items-center justify-between px-3 py-1.5 text-xs text-indigo-600 hover:bg-indigo-50 font-medium"
+            @click="ctxEnhance(ctxMenu.node)"
+          >
+            <span>✨ AI 增强</span><span class="text-slate-400">⚡</span>
+          </button>
+          <button
+            class="w-full flex items-center justify-between px-3 py-1.5 text-xs text-indigo-600 hover:bg-indigo-50 font-medium"
+            @click="ctxReclassify(ctxMenu.node)"
+          >
+            <span>🗂 智能重新分类</span><span class="text-slate-400">⇄</span>
+          </button>
+          <div class="my-1 border-t border-slate-100"></div>
           <button
             class="w-full flex items-center justify-between px-3 py-1.5 text-xs text-slate-700 hover:bg-indigo-50"
             @click="ctxEdit(ctxMenu.node)"

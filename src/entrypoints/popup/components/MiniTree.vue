@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import type { MetaBrief, TreeNodeDto } from '../../../shared/types';
 import { faviconUrl, tooltipIfTruncated } from '../../../shared/ui';
+import { beginRowDrag, draggingId, dropHint, shouldSuppressClick } from '../../../shared/dnd';
 
-defineProps<{
+const props = defineProps<{
   nodes: TreeNodeDto[];
   expanded: Set<string>;
   metaById: Record<string, MetaBrief>;
@@ -14,6 +15,24 @@ const emit = defineEmits<{
   open: [node: TreeNodeDto];
   contextMenu: [payload: { node: TreeNodeDto; x: number; y: number }];
 }>();
+
+/** 顶层即 Chrome 根文件夹（书签栏等）：不可拖动，只接受移入 */
+const isRootLevel = () => (props.depth ?? 0) === 0;
+
+function onRowClick(node: TreeNodeDto, act: 'toggle' | 'open') {
+  if (shouldSuppressClick()) return;
+  if (act === 'toggle') emit('toggle', node);
+  else emit('open', node);
+}
+
+function hintClass(node: TreeNodeDto): string {
+  const base = draggingId.value === node.id ? 'opacity-40' : '';
+  if (dropHint.value?.id !== node.id) return base;
+  const zone = dropHint.value.zone;
+  if (zone === 'into') return 'ring-2 ring-indigo-400';
+  if (zone === 'before') return 'shadow-[inset_0_2px_0_0_#6366f1]';
+  return 'shadow-[inset_0_-2px_0_0_#6366f1]';
+}
 </script>
 
 <template>
@@ -23,8 +42,14 @@ const emit = defineEmits<{
       <button
         v-if="!node.url"
         class="w-full flex items-center gap-1 rounded-md px-1.5 py-[5px] text-left text-[13px] hover:bg-slate-100 transition-colors"
+        :class="hintClass(node)"
         :style="{ paddingLeft: `${(depth ?? 0) * 12 + 4}px` }"
-        @click="emit('toggle', node)"
+        :data-ab-node="node.id"
+        :data-ab-type="'folder'"
+        :data-ab-root="isRootLevel() ? '1' : null"
+        @click="onRowClick(node, 'toggle')"
+        @mousedown="beginRowDrag(node, $event, isRootLevel())"
+        @dragstart.prevent
         @contextmenu.prevent.stop="emit('contextMenu', { node, x: $event.clientX, y: $event.clientY })"
       >
         <span class="w-3.5 shrink-0 grid place-items-center text-[9px] text-slate-400">
@@ -39,8 +64,13 @@ const emit = defineEmits<{
       <button
         v-else
         class="w-full flex items-center gap-1.5 rounded-md px-1.5 py-[5px] text-left text-[13px] hover:bg-indigo-50 hover:text-indigo-700 transition-colors group"
+        :class="hintClass(node)"
         :style="{ paddingLeft: `${(depth ?? 0) * 12 + 4}px` }"
-        @click="emit('open', node)"
+        :data-ab-node="node.id"
+        :data-ab-type="'bookmark'"
+        @click="onRowClick(node, 'open')"
+        @mousedown="beginRowDrag(node, $event, false)"
+        @dragstart.prevent
         @contextmenu.prevent.stop="emit('contextMenu', { node, x: $event.clientX, y: $event.clientY })"
       >
         <span class="w-3.5 shrink-0"></span>
@@ -50,7 +80,8 @@ const emit = defineEmits<{
           v-if="metaById[node.id]?.summary"
           class="shrink-0 hidden group-hover:block text-[9px] px-1 rounded bg-indigo-100 text-indigo-500"
           title="已 AI 增强"
-        >AI</span>
+          >AI</span
+        >
       </button>
 
       <!-- 子树 -->

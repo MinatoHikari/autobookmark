@@ -16,6 +16,7 @@ import { watchBookmarkEvents } from '../../core/bookmarks/sync';
 import { invalidateSearchIndex, searchBookmarks } from '../../core/search/search';
 import { computeFolderPath, getTreeDtos, listFolderPaths } from '../../core/organize/scan';
 import { enhanceSingle } from '../../core/organize/enhance';
+import { reclassifyBookmarkToBestFolder } from '../../core/organize/classify';
 import {
   startJob,
   pauseJob,
@@ -264,7 +265,17 @@ function setupMessageRouter() {
 
   onMessage('moveNode', async ({ data }) => {
     try {
-      await browser.bookmarks.move(data.id, { parentId: data.newParentId });
+      const moveArgs: { parentId: string; index?: number } = { parentId: data.newParentId };
+      if (data.index != null) {
+        moveArgs.index = data.index;
+        // 同层重排时浏览器把 index 解释为「移除前列表中占据该位者之前」插入（真机验证），
+        // 而调用方传的是期望的最终位置：向后移时 +1 换算；跨文件夹时 index 即目标位置，直接透传
+        const node = (await browser.bookmarks.get(data.id))[0];
+        if (node?.parentId === data.newParentId && node.index != null && data.index >= node.index) {
+          moveArgs.index = data.index + 1;
+        }
+      }
+      await browser.bookmarks.move(data.id, moveArgs);
       // 更新受影响书签的 folderPath（尽力而为）
       const metas = await getAllMeta();
       for (const m of metas) {
@@ -275,6 +286,7 @@ function setupMessageRouter() {
           }
         }
       }
+      await bumpLibraryVersion();
       return true;
     } catch (e) {
       console.warn('[autobookmark] moveNode failed:', e);
@@ -353,6 +365,11 @@ function setupMessageRouter() {
     const meta = await enhanceSingle(settings, data);
     invalidateSearchIndex();
     return meta;
+  });
+
+  onMessage('reclassifyBookmark', async ({ data }) => {
+    const settings = await getSettings();
+    return reclassifyBookmarkToBestFolder(settings, data);
   });
 
   onMessage('searchBookmarks', async ({ data }) => {

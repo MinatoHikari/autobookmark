@@ -3,7 +3,8 @@ import { computed, onMounted, ref } from 'vue';
 import { browser } from 'wxt/browser';
 import { sendMessage } from '../../shared/messages';
 import type { MetaBrief, SearchResultItem, TreeNodeDto } from '../../shared/types';
-import { findNode } from '../../core/organize/scan';
+import { findNode, flattenBookmarks } from '../../core/organize/scan';
+import { resolveDropTarget, setNodeDropHandler, type TreeDropEvent } from '../../shared/dnd';
 import FolderTree from './components/FolderTree.vue';
 import BookmarkList from './components/BookmarkList.vue';
 import OrganizePanel from './components/OrganizePanel.vue';
@@ -135,26 +136,25 @@ async function remove(node: TreeNodeDto) {
   await refreshTree();
 }
 
-async function onDropOn([node, payload]: [TreeNodeDto, string]) {
-  try {
-    const { type, id } = JSON.parse(payload) as { type: string; id: string };
-    if (id === node.id) return;
-    // 不能把文件夹移动到自己的子树里
-    if (type === 'folder' && findNode([node], id)) {
-      alert('不能移动到自身或其子文件夹内');
-      return;
-    }
-    const ok = await sendMessage('moveNode', { id, newParentId: node.id });
-    if (!ok) {
-      alert('移动失败（可能是系统文件夹或非法目标）');
-      return;
-    }
-    expandTo(node.id);
-    await refreshTree();
-  } catch {
-    /* 忽略非法拖拽数据 */
+/** 树行拖放落点：同级重排 / 跨文件夹插入 / 移入文件夹（拖源可为树行或右侧列表卡片） */
+async function onTreeDrop({ targetId, zone, draggedId }: TreeDropEvent) {
+  const target = findNode(tree.value, targetId);
+  if (!target) return;
+  const res = resolveDropTarget(tree.value, draggedId, target, zone);
+  if (!res.ok) {
+    if (res.reason === 'invalid') alert('不能移动到该位置（自身、子文件夹或系统根文件夹）');
+    return;
   }
+  const ok = await sendMessage('moveNode', { id: draggedId, newParentId: res.parentId, index: res.index });
+  if (!ok) {
+    alert('移动失败（可能是系统文件夹或非法目标）');
+    return;
+  }
+  if (zone === 'into') expandTo(target.id);
+  await refreshTree();
 }
+
+setNodeDropHandler((e) => void onTreeDrop(e));
 
 function onSearchInput() {
   clearTimeout(searchTimer);
@@ -209,7 +209,7 @@ function openCtxMenu(payload: { node: TreeNodeDto; x: number; y: number }) {
   ctxMenu.value = { node: payload.node, x, y };
 }
 
-async function menuAction(act: 'open' | 'edit' | 'createIn' | 'delete') {
+async function menuAction(act: 'open' | 'edit' | 'createIn' | 'delete' | 'enhance' | 'reclassify') {
   const node = ctxMenu.value?.node;
   ctxMenu.value = null;
   if (!node) return;
@@ -219,6 +219,55 @@ async function menuAction(act: 'open' | 'edit' | 'createIn' | 'delete') {
     else await rename(node);
   } else if (act === 'createIn') await createIn(node);
   else if (act === 'delete') await remove(node);
+  else if (act === 'enhance') await ctxEnhance(node);
+  else if (act === 'reclassify') await ctxReclassify(node);
+}
+
+// ---- 右键 AI 操作（书签=单条；文件夹=整棵子树，走后台任务并打开整理中心看进度）----
+async function ctxEnhance(node: TreeNodeDto) {
+  if (node.url) {
+    await enhanceIds([node.id]);
+    return;
+  }
+  const ids = flattenBookmarks([node], []).map((b) => b.id);
+  if (!ids.length) {
+    alert('文件夹里没有可增强的书签');
+    return;
+  }
+  try {
+    await sendMessage('startJob', { kind: 'enhance', params: { ids, fetchContent: false } });
+    showOrganize.value = true;
+  } catch (e) {
+    alert((e as Error).message);
+  }
+}
+
+async function ctxReclassify(node: TreeNodeDto) {
+  if (node.url) {
+    try {
+      const r = await sendMessage('reclassifyBookmark', node.id);
+      if (!r.ok) {
+        alert(r.reason === 'no-candidates' ? '没有可用的目标目录' : 'AI 未能确定目标目录');
+        return;
+      }
+    } catch (e) {
+      alert(`分类失败：${(e as Error).message}`);
+      return;
+    }
+    await refreshTree();
+    return;
+  }
+  // 根分区（书签栏/其他书签）沿用原有 scope；普通文件夹以子树为输入
+  const isRootIdx = tree.value.findIndex((r) => r.id === node.id);
+  const params: Record<string, unknown> = isRootIdx >= 0
+    ? { scope: isRootIdx === 0 ? 'toolbar' : 'other', maxCategories: 12 }
+    : { scope: 'folder', folderId: node.id, maxCategories: 12 };
+  try {
+    await sendMessage('startJob', { kind: 'classify', params });
+    showOrganize.value = true;
+  } catch (e) {
+    alert((e as Error).message);
+  }
 }
 
 async function enhanceIds(ids: string[]) {
@@ -346,7 +395,6 @@ onMounted(async () => {
           @create-in="createIn"
           @rename="rename"
           @remove="remove"
-          @drop-on="onDropOn"
         />
       </aside>
 
@@ -431,6 +479,18 @@ onMounted(async () => {
         class="absolute z-50 min-w-[150px] rounded-lg bg-white border border-slate-200 shadow-lg py-1 text-sm"
         :style="{ left: `${ctxMenu.x}px`, top: `${ctxMenu.y}px` }"
       >
+        <button
+          class="w-full text-left px-3 py-1.5 text-indigo-600 hover:bg-indigo-50 font-medium"
+          @click="menuAction('enhance')"
+        >
+          ✨ AI 增强
+        </button>
+        <button
+          class="w-full text-left px-3 py-1.5 text-indigo-600 hover:bg-indigo-50 font-medium"
+          @click="menuAction('reclassify')"
+        >
+          🗂 智能重新分类
+        </button>
         <button
           v-if="ctxMenu.node.url"
           class="w-full text-left px-3 py-1.5 hover:bg-indigo-50 hover:text-indigo-700"

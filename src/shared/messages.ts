@@ -36,7 +36,8 @@ interface ProtocolMap {
 
   // ---- 书签树浏览 / 管理 ----
   getBookmarksTree(): { tree: TreeNodeDto[]; metaById: Record<string, MetaBrief> };
-  moveNode(input: { id: string; newParentId: string }): boolean;
+  /** index 省略时追加到目标文件夹末尾；传入值为移除被拖节点后的最终位置（同层重排的后台换算细节见 handler） */
+  moveNode(input: { id: string; newParentId: string; index?: number }): boolean;
   renameNode(input: { id: string; title: string }): boolean;
   createFolder(input: { parentId: string; title: string }): string;
   removeNode(id: string): boolean;
@@ -44,6 +45,8 @@ interface ProtocolMap {
   updateMeta(input: { bookmarkId: string; title?: string; url?: string; summary: string; tags: string[] }): BookmarkMeta | null;
   /** 对已存在书签单条补 AI 元数据（复用 enhance 管线，不改书签标题） */
   enhanceExisting(bookmarkId: string): BookmarkMeta;
+  /** 单条书签智能重新分类：AI 从现有目录路径中挑最合适的并移动 */
+  reclassifyBookmark(bookmarkId: string): { ok: boolean; folder?: string; reason?: 'no-candidates' | 'ai-error' };
   searchBookmarks(query: string): SearchResultItem[];
   deleteBookmark(bookmarkId: string): boolean;
 

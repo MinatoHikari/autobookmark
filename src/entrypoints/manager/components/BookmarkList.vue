@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue';
 import type { MetaBrief, TreeNodeDto } from '../../../shared/types';
 import { sendMessage } from '../../../shared/messages';
+import { beginRowDrag, shouldSuppressClick } from '../../../shared/dnd';
 import { faviconUrl, formatTime } from '../../../shared/ui';
 import MetaEditDialog from '../../../components/MetaEditDialog.vue';
 
@@ -55,12 +56,14 @@ async function removeItem(id: string) {
   emit('nodeChanged');
 }
 
-function onDragStart(node: TreeNodeDto, event: DragEvent) {
-  event.dataTransfer?.setData(
-    'application/x-ab-node',
-    JSON.stringify({ type: node.url ? 'bookmark' : 'folder', id: node.id }),
-  );
-  event.dataTransfer!.effectAllowed = 'move';
+function openFolder(folder: TreeNodeDto) {
+  if (shouldSuppressClick()) return;
+  emit('openFolder', folder);
+}
+
+function openUrl(node: TreeNodeDto) {
+  if (shouldSuppressClick()) return;
+  emit('open', node.url ?? '');
 }
 
 async function enhanceChecked() {
@@ -82,10 +85,10 @@ async function enhanceOne(id: string) {
       <button
         v-for="folder in folders"
         :key="folder.id"
-        draggable="true"
         class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-sm hover:border-indigo-300 hover:text-indigo-700 transition-colors"
-        @click="emit('openFolder', folder)"
-        @dragstart="onDragStart(folder, $event)"
+        @click="openFolder(folder)"
+        @mousedown="beginRowDrag(folder, $event, false)"
+        @dragstart.prevent
       >
         <span>📁</span>{{ folder.title }}
         <span class="text-[10px] text-slate-400">{{ folder.children.length }}</span>
@@ -113,8 +116,8 @@ async function enhanceOne(id: string) {
       :key="node.id"
       class="group flex items-start gap-2.5 rounded-xl bg-white border p-3 transition-colors"
       :class="[checked.has(node.id) ? 'border-indigo-300 bg-indigo-50/40' : 'border-slate-200 hover:border-indigo-200']"
-      draggable="true"
-      @dragstart="onDragStart(node, $event)"
+      @mousedown="beginRowDrag(node, $event, false)"
+      @dragstart.prevent
     >
       <input
         type="checkbox"
@@ -123,7 +126,7 @@ async function enhanceOne(id: string) {
         @change="toggleCheck(node.id)"
       />
       <img :src="faviconUrl(node.url ?? '')" class="w-4 h-4 mt-1 rounded" alt="" loading="lazy" />
-      <div class="min-w-0 flex-1 cursor-pointer" @click="emit('open', node.url ?? '')">
+      <div class="min-w-0 flex-1 cursor-pointer" @click="openUrl(node)">
         <div class="flex items-center gap-1.5 flex-wrap">
           <h3 class="text-sm font-medium leading-snug break-words group-hover:text-indigo-700 transition-colors">
             {{ node.title }}

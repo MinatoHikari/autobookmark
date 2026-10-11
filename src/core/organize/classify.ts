@@ -2,9 +2,11 @@ import { browser } from 'wxt/browser';
 import { z } from 'zod';
 import type { OrganizeJob, UndoEntry } from '../../shared/types';
 import type { Settings } from '../storage/settings';
+import { bumpLibraryVersion } from '../storage/db';
 import { chatJson } from '../ai/enhance';
 import { buildAssignMessages, buildClusterMessages } from '../ai/prompts';
-import { flattenBookmarks, getTreeDtos } from './scan';
+import { computeFolderPath, findNode, flattenBookmarks, getTreeDtos, listFolderPaths } from './scan';
+import { resolveFolderPath } from '../bookmarks/pipeline';
 import { runWithSplit } from './split';
 
 const CLUSTER_BATCH = 80;
@@ -13,7 +15,9 @@ const MOVE_BATCH = 25;
 const BATCH_TIMEOUT_MS = 300_000;
 
 export interface ClassifyParams {
-  scope: 'toolbar' | 'other' | 'all';
+  scope: 'toolbar' | 'other' | 'all' | 'folder';
+  /** scope='folder' 时必填：目标文件夹 id，类目仍建在"其他书签"下（与整理中心一致） */
+  folderId?: string;
   maxCategories: number;
   progress: {
     phase: 'cluster' | 'assign' | 'execute' | 'sweep';
@@ -33,7 +37,7 @@ const assignSchema = z.object({
   assignments: z.array(z.object({ i: z.number().int(), category: z.string().min(1).max(24) })),
 });
 
-/** 范围对应的根节点 id（书签栏 / 其他书签） */
+/** 范围对应的根节点 id（书签栏 / 其他书签）；folder 模式与 all 一致落在其他书签下 */
 async function resolveScopeRootId(scope: ClassifyParams['scope']): Promise<string> {
   const tree = await getTreeDtos();
   // Chrome: children[0]=书签栏 children[1]=其他书签（getTreeDtos 已去掉总根）
@@ -42,36 +46,54 @@ async function resolveScopeRootId(scope: ClassifyParams['scope']): Promise<strin
   return scope === 'toolbar' ? toolbar : other;
 }
 
-/** 收集整理范围（跳过"AI 收藏"子树与已增强项可选） */
+/** 收集整理范围；scope='folder' 时仅以目标文件夹子树为输入（抛错=找不到目标文件夹） */
 export async function prepareClassify(job: OrganizeJob, settings: Settings): Promise<void> {
   void settings;
   const params = job.params as unknown as Partial<ClassifyParams>;
   const scope = params.scope ?? 'all';
   const tree = await getTreeDtos();
-  const scopeNodes = tree.filter((_, idx) =>
-    scope === 'all' ? true : scope === 'toolbar' ? idx === 0 : idx === 1,
-  );
 
   // 旧文件夹快照（清空后可删）；跳过根级"AI 收藏"
   const oldFolderIds: string[] = [];
-  const collectFolders = (nodes: typeof tree, inScopeRoot: boolean): void => {
-    for (const node of nodes) {
-      if (node.url) continue;
-      if (inScopeRoot && node.title === 'AI 收藏') continue;
-      oldFolderIds.push(node.id);
-      collectFolders(node.children, false);
-    }
-  };
-  collectFolders(scopeNodes ?? [], true);
-
-  const items = flattenBookmarks(scopeNodes ?? [], ['AI 收藏']).map((b) => ({
-    id: b.id,
-    title: b.title,
-    url: b.url,
-  }));
+  let scopeNodes: typeof tree;
+  let items: ClassifyParams['items'];
+  if (scope === 'folder') {
+    // 指定文件夹：仅以该子树内的书签为输入；目标文件夹自身不进 sweep 名单（清空也不删）
+    const folder = findNode(tree, params.folderId ?? '');
+    if (!folder || folder.url) throw new Error('未找到目标文件夹');
+    scopeNodes = [folder];
+    const collectInner = (nodes: typeof tree): void => {
+      for (const node of nodes) {
+        if (node.url) continue;
+        oldFolderIds.push(node.id);
+        collectInner(node.children);
+      }
+    };
+    collectInner(folder.children);
+    items = flattenBookmarks([folder], []).map((b) => ({ id: b.id, title: b.title, url: b.url }));
+  } else {
+    scopeNodes = tree.filter((_, idx) =>
+      scope === 'all' ? true : scope === 'toolbar' ? idx === 0 : idx === 1,
+    );
+    const collectFolders = (nodes: typeof tree, inScopeRoot: boolean): void => {
+      for (const node of nodes) {
+        if (node.url) continue;
+        if (inScopeRoot && node.title === 'AI 收藏') continue;
+        oldFolderIds.push(node.id);
+        collectFolders(node.children, false);
+      }
+    };
+    collectFolders(scopeNodes ?? [], true);
+    items = flattenBookmarks(scopeNodes ?? [], ['AI 收藏']).map((b) => ({
+      id: b.id,
+      title: b.title,
+      url: b.url,
+    }));
+  }
 
   const full: ClassifyParams = {
     scope,
+    folderId: params.folderId,
     maxCategories: params.maxCategories ?? 12,
     items,
     rootId: await resolveScopeRootId(scope),
@@ -247,11 +269,60 @@ export async function processClassifyBatch(settings: Settings, job: OrganizeJob)
     const undecided = params.items.length - assigned;
     job.result = {
       report: [
-        `已建 ${p.createdFolderIds.length} 个分类文件夹（${p.categories.slice(0, 8).join('、')}${p.categories.length > 8 ? '…' : ''}）`,
+        p.createdFolderIds.length
+          ? `已建 ${p.createdFolderIds.length} 个分类文件夹（${p.categories.slice(0, 8).join('、')}${p.categories.length > 8 ? '…' : ''}）`
+          : '没有生成新的分类文件夹',
         `已移动 ${assigned} 条书签`,
         `未归类 ${undecided} 条保留原地`,
         `清理空文件夹 ${p.removedFolders} 个`,
       ],
     };
   }
+}
+
+const singleAssignSchema = z.object({
+  assignments: z.array(z.object({ i: z.number().int(), category: z.string().min(1) })),
+});
+
+export interface ReclassifyResult {
+  ok: boolean;
+  /** 移动成功时的目标目录完整路径 */
+  folder?: string;
+  reason?: 'no-candidates' | 'ai-error';
+}
+
+/** 单条书签智能重新分类：AI 从现有目录路径中挑最合适的一个并移动过去 */
+export async function reclassifyBookmarkToBestFolder(
+  settings: Settings,
+  bookmarkId: string,
+): Promise<ReclassifyResult> {
+  const node = (await browser.bookmarks.get(bookmarkId).catch(() => []))[0];
+  if (!node?.url) return { ok: false, reason: 'no-candidates' };
+
+  const candidates = await listFolderPaths();
+  const currentPath = await computeFolderPath(node.parentId);
+  const options = candidates.filter((p) => p && p !== currentPath);
+  if (options.length < 1) return { ok: false, reason: 'no-candidates' };
+
+  let chosen: string | undefined;
+  try {
+    const data = await chatJson(
+      settings,
+      'enhance',
+      buildAssignMessages([{ i: 0, title: node.title, url: node.url }], options),
+      (raw) => singleAssignSchema.parse(raw),
+      { timeoutMs: BATCH_TIMEOUT_MS },
+    );
+    const answer = data.assignments[0]?.category.trim();
+    chosen = options.find((p) => p === answer);
+  } catch {
+    return { ok: false, reason: 'ai-error' };
+  }
+  if (!chosen) return { ok: false, reason: 'ai-error' };
+
+  const parentId = await resolveFolderPath(chosen);
+  if (parentId === node.parentId) return { ok: true, folder: chosen };
+  await browser.bookmarks.move(node.id, { parentId });
+  await bumpLibraryVersion();
+  return { ok: true, folder: chosen };
 }
