@@ -445,6 +445,16 @@ onMounted(reload);
             </select>
           </label>
         </div>
+        <label class="block">
+          <span class="text-xs font-medium text-slate-500">书签打开方式（popup 左键点击）</span>
+          <select
+            v-model="settings.preferences.bookmarkOpenMode"
+            class="mt-1 w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm bg-white"
+          >
+            <option value="newTab">在新标签页打开</option>
+            <option value="currentTab">在当前标签页打开</option>
+          </select>
+        </label>
         <label class="flex items-center gap-2 text-sm">
           <input type="checkbox" v-model="settings.preferences.autoFolder" class="accent-indigo-600" />
           按 AI 建议的文件夹分类收藏
