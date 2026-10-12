@@ -660,6 +660,26 @@ try {
       console.log('[smoke] 助手页文本:', JSON.stringify(t));
       errors.push('切换 tab 后对话内容丢失');
     }
+
+    // 输入框草稿：切 tab 后保留
+    await mp3.evaluate(() => {
+      const ta = document.querySelector('textarea');
+      if (!ta) throw new Error('未找到输入框');
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+      setter.call(ta, '这是一条未发送的草稿');
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await mp3.evaluate(() => {
+      [...document.querySelectorAll('button')].find((el) => el.textContent?.includes('⚙ 设置'))?.click();
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    await mp3.evaluate(() => {
+      [...document.querySelectorAll('button')].find((el) => el.textContent?.includes('🤖 助手'))?.click();
+    });
+    await new Promise((r) => setTimeout(r, 400));
+    const draftKept = await mp3.evaluate(() => document.querySelector('textarea')?.value ?? '');
+    console.log(`[smoke] 输入草稿保留: ${draftKept ? '✓' : '✗'}`);
+    if (draftKept !== '这是一条未发送的草稿') errors.push('切换 tab 后输入草稿丢失');
     await mp3.close();
   }
 

@@ -1,3 +1,11 @@
+<script lang="ts">
+/**
+ * 模块级输入草稿：切换视图（组件卸载重建）后仍保留，刷新页面才清空。
+ * 放在模块作用域而非组件实例，保证跨挂载存活。
+ */
+let inputDraft = '';
+</script>
+
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { browser } from 'wxt/browser';
@@ -31,7 +39,10 @@ const ACTIVE_KEY = 'agentActiveId';
 
 const conversations = ref<Conversation[]>([]);
 const activeId = ref<string>('');
-const input = ref('');
+const input = ref(inputDraft);
+watch(input, (v) => {
+  inputDraft = v;
+});
 const running = ref(false);
 const errorMsg = ref('');
 const listEl = ref<HTMLElement | null>(null);
