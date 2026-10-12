@@ -2,7 +2,7 @@
   "name": "autobookmark",
   "description": "AI-powered smart bookmarks: auto title/summary/tags, hybrid semantic search. Bring your own AI provider (Z.ai, DeepSeek, OpenAI-compatible).",
   "private": true,
-  "version": "0.6.1",
+  "version": "0.7.0",
   "type": "module",
   "scripts": {
     "dev": "wxt",

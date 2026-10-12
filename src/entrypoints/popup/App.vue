@@ -70,10 +70,11 @@ async function startEnhance() {
     Object.assign(draft, d);
     // AI 建议的目标目录（用户仍可通过下拉手动改）
     const settings = await sendMessage('getSettings');
-    savePath.value =
-      settings.preferences.saveStrategy === 'existing'
-        ? d.folder
-        : `其他书签/${settings.preferences.rootFolder}/${d.folder}`;
+    const useDedicated =
+      settings.preferences.saveStrategy === 'aiFolder' && settings.preferences.autoFolder;
+    savePath.value = useDedicated
+      ? `其他书签/${settings.preferences.rootFolder}/${d.folder}`
+      : d.folder;
     phase.value = 'draft';
   } catch (e) {
     errorMsg.value = (e as Error).message;
@@ -334,12 +335,13 @@ const savePath = ref('');
 
 async function loadFolderPaths() {
   folderPaths.value = await sendMessage('listFolderPaths');
-  // 默认落点：aiFolder 策略 → AI 收藏根；existing → 其他书签根
+  // 默认落点：使用专门目录（aiFolder + 勾选）→ AI 收藏根；否则 → 其他书签根
   const settings = await sendMessage('getSettings');
-  savePath.value =
-    settings.preferences.saveStrategy === 'existing'
-      ? '其他书签'
-      : `其他书签/${settings.preferences.rootFolder}`;
+  const useDedicated =
+    settings.preferences.saveStrategy === 'aiFolder' && settings.preferences.autoFolder;
+  savePath.value = useDedicated
+    ? `其他书签/${settings.preferences.rootFolder}`
+    : '其他书签';
 }
 
 // ---- 树右键菜单 ----
@@ -353,9 +355,10 @@ function showToast(msg: string) {
   toastTimer = setTimeout(() => (toast.value = ''), 1400);
 }
 
-// ---- 右键新建（子文件夹 / 书签）----
+// ---- 右键新建（子文件夹 / 书签）与文件夹重命名 ----
 const newFolderForm = ref<{ node: TreeNodeDto; name: string } | null>(null);
 const newBookmarkForm = ref<{ node: TreeNodeDto; title: string; url: string } | null>(null);
+const renameFolderForm = ref<{ node: TreeNodeDto; name: string } | null>(null);
 const createError = ref('');
 
 function nodeFolderPath(node: TreeNodeDto): string {
@@ -576,10 +579,30 @@ function ctxEdit(node: TreeNodeDto) {
     ctxEditNode.value = node;
     return;
   }
-  // 文件夹：重命名
-  const title = prompt('重命名文件夹', node.title);
-  if (!title?.trim() || title === node.title) return;
-  void sendMessage('renameNode', { id: node.id, title: title.trim() }).then(() => reloadTree());
+  // 文件夹：重命名（自定义弹层，原生 prompt 会让 popup 失焦关闭）
+  createError.value = '';
+  renameFolderForm.value = { node, name: node.title };
+}
+
+async function confirmRenameFolder() {
+  const form = renameFolderForm.value;
+  const name = form?.name.trim();
+  if (!form || !name) {
+    createError.value = '文件夹名称不能为空';
+    return;
+  }
+  if (name === form.node.title) {
+    renameFolderForm.value = null;
+    return;
+  }
+  try {
+    await sendMessage('renameNode', { id: form.node.id, title: name });
+    renameFolderForm.value = null;
+    await reloadTree();
+    showToast('已重命名');
+  } catch (e) {
+    createError.value = (e as Error).message;
+  }
 }
 
 function openManagerSettings() {
@@ -1033,7 +1056,7 @@ onMounted(async () => {
             class="w-full flex items-center justify-between px-3 py-1.5 text-xs text-slate-700 hover:bg-indigo-50"
             @click="ctxOpenWhere(ctxMenu.node, 'current')"
           >
-            <span>当前窗口打开</span><span class="text-slate-400">⇱</span>
+            <span>当前标签页打开</span><span class="text-slate-400">⇱</span>
           </button>
           <button
             v-if="ctxMenu.node.url && settings?.preferences.bookmarkOpenMode === 'currentTab'"
@@ -1130,6 +1153,30 @@ onMounted(async () => {
         <div class="flex justify-end gap-2">
           <button class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600" @click="newFolderForm = null">取消</button>
           <button class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700" @click="confirmCreateFolder">创建</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 重命名文件夹弹层 -->
+    <div
+      v-if="renameFolderForm"
+      class="fixed inset-0 z-50 grid place-items-center bg-slate-900/40 p-6"
+      @click.self="renameFolderForm = null"
+    >
+      <div class="w-full max-w-xs rounded-xl bg-white p-4 shadow-xl space-y-3">
+        <p class="text-sm font-medium">重命名文件夹</p>
+        <p class="text-[11px] text-slate-400">位置：{{ nodeFolderPath(renameFolderForm.node) }}</p>
+        <p v-if="createError" class="px-2.5 py-1.5 rounded-lg bg-red-50 text-red-600 text-xs">{{ createError }}</p>
+        <input
+          v-model="renameFolderForm.name"
+          autofocus
+          placeholder="文件夹名称"
+          class="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:border-indigo-400"
+          @keydown.enter="confirmRenameFolder"
+        />
+        <div class="flex justify-end gap-2">
+          <button class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600" @click="renameFolderForm = null">取消</button>
+          <button class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700" @click="confirmRenameFolder">保存</button>
         </div>
       </div>
     </div>

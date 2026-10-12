@@ -119,28 +119,58 @@ function toggleFolder(node: TreeNodeDto) {
   expanded.value = next;
 }
 
-async function createIn(parent: TreeNodeDto) {
-  const title = prompt('新建文件夹名称');
-  if (!title?.trim()) return;
-  await sendMessage('createFolder', { parentId: parent.id, title: title.trim() });
-  const next = new Set(expanded.value);
-  next.add(parent.id);
-  expanded.value = next;
-  await refreshTree();
+// ---- 文件夹新建/重命名、删除确认弹层（原生 prompt/confirm/alert 在无头/自动化环境下会永久阻塞页面）----
+const folderForm = ref<null | { mode: 'create' | 'rename'; node: TreeNodeDto; name: string }>(null);
+const folderFormError = ref('');
+const confirmRemoveNode = ref<TreeNodeDto | null>(null);
+const noticeMsg = ref('');
+
+function createIn(parent: TreeNodeDto) {
+  folderFormError.value = '';
+  folderForm.value = { mode: 'create', node: parent, name: '' };
 }
 
-async function rename(node: TreeNodeDto) {
-  const title = prompt('重命名', node.title);
-  if (!title?.trim() || title === node.title) return;
-  await sendMessage('renameNode', { id: node.id, title: title.trim() });
-  await refreshTree();
+function rename(node: TreeNodeDto) {
+  folderFormError.value = '';
+  folderForm.value = { mode: 'rename', node, name: node.title };
 }
 
-async function remove(node: TreeNodeDto) {
-  const msg = node.url
-    ? `删除书签「${node.title}」？`
-    : `删除文件夹「${node.title}」及其全部内容？`;
-  if (!confirm(msg)) return;
+function remove(node: TreeNodeDto) {
+  confirmRemoveNode.value = node;
+}
+
+async function confirmFolderForm() {
+  const form = folderForm.value;
+  const name = form?.name.trim();
+  if (!form) return;
+  if (!name) {
+    folderFormError.value = '名称不能为空';
+    return;
+  }
+  try {
+    if (form.mode === 'create') {
+      await sendMessage('createFolder', { parentId: form.node.id, title: name });
+      const next = new Set(expanded.value);
+      next.add(form.node.id);
+      expanded.value = next;
+    } else {
+      if (name === form.node.title) {
+        folderForm.value = null;
+        return;
+      }
+      await sendMessage('renameNode', { id: form.node.id, title: name });
+    }
+    folderForm.value = null;
+    await refreshTree();
+  } catch (e) {
+    folderFormError.value = (e as Error).message;
+  }
+}
+
+async function confirmRemoveAction() {
+  const node = confirmRemoveNode.value;
+  confirmRemoveNode.value = null;
+  if (!node) return;
   await sendMessage('removeNode', node.id);
   await refreshTree();
 }
@@ -151,12 +181,12 @@ async function onTreeDrop({ targetId, zone, draggedId }: TreeDropEvent) {
   if (!target) return;
   const res = resolveDropTarget(tree.value, draggedId, target, zone);
   if (!res.ok) {
-    if (res.reason === 'invalid') alert('不能移动到该位置（自身、子文件夹或系统根文件夹）');
+    if (res.reason === 'invalid') noticeMsg.value = '不能移动到该位置（自身、子文件夹或系统根文件夹）';
     return;
   }
   const ok = await sendMessage('moveNode', { id: draggedId, newParentId: res.parentId, index: res.index });
   if (!ok) {
-    alert('移动失败（可能是系统文件夹或非法目标）');
+    noticeMsg.value = '移动失败（可能是系统文件夹或非法目标）';
     return;
   }
   if (zone === 'into') expandTo(target.id);
@@ -212,7 +242,7 @@ async function openUrl(url: string) {
 const ctxMenu = ref<{ node: TreeNodeDto; x: number; y: number } | null>(null);
 const managerSettings = ref<Settings | null>(null);
 const openModeLabel = computed(() =>
-  managerSettings.value?.preferences.bookmarkOpenMode === 'currentTab' ? '新标签页打开' : '当前窗口打开',
+  managerSettings.value?.preferences.bookmarkOpenMode === 'currentTab' ? '新标签页打开' : '当前标签页打开',
 );
 
 async function ctxOpenWhere(node: TreeNodeDto, where: 'current' | 'newTab' | 'window' | 'incognito') {
@@ -299,14 +329,14 @@ async function ctxEnhance(node: TreeNodeDto) {
   }
   const ids = flattenBookmarks([node], []).map((b) => b.id);
   if (!ids.length) {
-    alert('文件夹里没有可增强的书签');
+    showToast('文件夹里没有可增强的书签');
     return;
   }
   try {
     await sendMessage('startJob', { kind: 'enhance', params: { ids, fetchContent: false } });
     showOrganize.value = true;
   } catch (e) {
-    alert((e as Error).message);
+    showToast((e as Error).message);
   }
 }
 
@@ -350,7 +380,7 @@ async function ctxReclassify(node: TreeNodeDto) {
     await sendMessage('startJob', { kind: 'classify', params });
     showOrganize.value = true;
   } catch (e) {
-    alert((e as Error).message);
+    showToast((e as Error).message);
   }
 }
 
@@ -591,7 +621,7 @@ onMounted(async () => {
           class="w-full text-left px-3 py-1.5 hover:bg-indigo-50 hover:text-indigo-700"
           @click="ctxOpenWhere(ctxMenu.node, 'current')"
         >
-          当前窗口打开
+          当前标签页打开
         </button>
         <button
           v-if="ctxMenu.node.url && managerSettings?.preferences.bookmarkOpenMode === 'currentTab'"
@@ -692,6 +722,66 @@ onMounted(async () => {
         <div class="flex justify-end gap-2">
           <button class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50" @click="createBookmarkState = null">取消</button>
           <button class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700" @click="confirmCreateBookmark">创建</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 文件夹新建/重命名弹层 -->
+    <div
+      v-if="folderForm"
+      class="fixed inset-0 z-50 grid place-items-center bg-slate-900/40 p-6"
+      @click.self="folderForm = null"
+    >
+      <div class="w-full max-w-xs rounded-xl bg-white p-4 shadow-xl space-y-3">
+        <p class="text-sm font-medium">{{ folderForm.mode === 'create' ? '新建子文件夹' : '重命名' }}</p>
+        <p class="text-[11px] text-slate-400">位置：{{ nodeFolderPath(folderForm.node) }}</p>
+        <p v-if="folderFormError" class="px-2.5 py-1.5 rounded-lg bg-red-50 text-red-600 text-xs">{{ folderFormError }}</p>
+        <input
+          v-model="folderForm.name"
+          autofocus
+          placeholder="文件夹名称"
+          class="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:border-indigo-400"
+          @keydown.enter="confirmFolderForm"
+        />
+        <div class="flex justify-end gap-2">
+          <button class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50" @click="folderForm = null">取消</button>
+          <button class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700" @click="confirmFolderForm">
+            {{ folderForm.mode === 'create' ? '创建' : '保存' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 删除二次确认弹层 -->
+    <div
+      v-if="confirmRemoveNode"
+      class="fixed inset-0 z-50 grid place-items-center bg-slate-900/40 p-6"
+      @click.self="confirmRemoveNode = null"
+    >
+      <div class="w-full max-w-xs rounded-xl bg-white p-4 shadow-xl space-y-3">
+        <p class="text-sm font-medium">{{ confirmRemoveNode.url ? '删除书签' : '删除文件夹' }}</p>
+        <p class="text-xs text-slate-600 leading-relaxed break-words">
+          确定删除「{{ confirmRemoveNode.title }}」{{
+            confirmRemoveNode.url ? '' : '及其全部内容'
+          }}？
+        </p>
+        <div class="flex justify-end gap-2">
+          <button class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50" @click="confirmRemoveNode = null">取消</button>
+          <button class="px-3 py-1.5 rounded-lg bg-red-500 text-white text-xs font-medium hover:bg-red-600" @click="confirmRemoveAction">确认删除</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 通知弹层（替代原生 alert） -->
+    <div
+      v-if="noticeMsg"
+      class="fixed inset-0 z-50 grid place-items-center bg-slate-900/40 p-6"
+      @click.self="noticeMsg = ''"
+    >
+      <div class="w-full max-w-xs rounded-xl bg-white p-4 shadow-xl space-y-3">
+        <p class="text-xs text-slate-600 leading-relaxed">{{ noticeMsg }}</p>
+        <div class="flex justify-end">
+          <button class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700" @click="noticeMsg = ''">知道了</button>
         </div>
       </div>
     </div>

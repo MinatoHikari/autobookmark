@@ -16,6 +16,19 @@ const scope = ref<'all' | 'toolbar' | 'other'>('all');
 const maxCategories = ref(12);
 const fetchContent = ref(false);
 
+// ---- 自定义弹层（原生 confirm/alert 在无头/自动化环境下会永久阻塞页面）----
+const confirmState = ref<null | { text: string; action: () => void }>(null);
+const noticeMsg = ref('');
+
+function askConfirm(text: string, action: () => void) {
+  confirmState.value = { text, action };
+}
+function runConfirm() {
+  const c = confirmState.value;
+  confirmState.value = null;
+  c?.action();
+}
+
 const unenhancedCount = computed(() => props.unenhancedIds.length);
 
 let timer: ReturnType<typeof setInterval> | undefined;
@@ -51,29 +64,33 @@ async function refresh() {
 }
 
 async function removeBackup(b: BackupEntry) {
-  if (!confirm(`删除备份「${b.label}」？此操作不可恢复。`)) return;
-  busy.value = true;
-  try {
-    await sendMessage('deleteBackup', b.id);
-    await refresh();
-  } finally {
-    busy.value = false;
-  }
+  askConfirm(`删除备份「${b.label}」？此操作不可恢复。`, async () => {
+    busy.value = true;
+    try {
+      await sendMessage('deleteBackup', b.id);
+      await refresh();
+    } finally {
+      busy.value = false;
+    }
+  });
 }
 
 async function recoverFromMeta() {
-  if (!confirm('扫描 AI 元数据，重建 chrome.bookmarks 中已消失的书签？\n（只恢复被 AI 增强过的书签，放到「其他书签/恢复的书签」下）')) return;
-  busy.value = true;
-  try {
-    const { recovered, skipped } = await sendMessage('recoverFromMeta');
-    await refresh();
-    emit('changed');
-    alert(recovered ? `已恢复 ${recovered} 条书签到「其他书签/恢复的书签」` : `没有发现可恢复的书签${skipped ? `（${skipped} 条候选的 URL 已存在，跳过）` : ''}`);
-  } catch (e) {
-    errorMsg.value = (e as Error).message;
-  } finally {
-    busy.value = false;
-  }
+  askConfirm('扫描 AI 元数据，重建 chrome.bookmarks 中已消失的书签？\n（只恢复被 AI 增强过的书签，放到「其他书签/恢复的书签」下）', async () => {
+    busy.value = true;
+    try {
+      const { recovered, skipped } = await sendMessage('recoverFromMeta');
+      await refresh();
+      emit('changed');
+      noticeMsg.value = recovered
+        ? `已恢复 ${recovered} 条书签到「其他书签/恢复的书签」`
+        : `没有发现可恢复的书签${skipped ? `（${skipped} 条候选的 URL 已存在，跳过）` : ''}`;
+    } catch (e) {
+      errorMsg.value = (e as Error).message;
+    } finally {
+      busy.value = false;
+    }
+  });
 }
 
 async function backupNow() {
@@ -100,22 +117,21 @@ function downloadBackup(b: BackupEntry) {
 }
 
 async function restore(b: BackupEntry) {
-  if (
-    !confirm(
-      `恢复到 ${new Date(b.createdAt).toLocaleString('zh-CN')} 的书签结构？\n` +
-        '当前全部书签将被清空并按快照重建（恢复前会自动再备份一次）。\n' +
-        '注意：AI 摘要/标签等元数据在恢复后会失效。',
-    )
-  )
-    return;
-  busy.value = true;
-  try {
-    await sendMessage('restoreBackup', b.id);
-    await refresh();
-    emit('changed');
-  } finally {
-    busy.value = false;
-  }
+  askConfirm(
+    `恢复到 ${new Date(b.createdAt).toLocaleString('zh-CN')} 的书签结构？\n` +
+      '当前全部书签将被清空并按快照重建（恢复前会自动再备份一次）。\n' +
+      '注意：AI 摘要/标签等元数据在恢复后会失效。',
+    async () => {
+      busy.value = true;
+      try {
+        await sendMessage('restoreBackup', b.id);
+        await refresh();
+        emit('changed');
+      } finally {
+        busy.value = false;
+      }
+    },
+  );
 }
 
 async function refreshAccess() {
@@ -163,7 +179,14 @@ function startDeadlink() {
 }
 
 async function removeJob(job: OrganizeJob) {
-  if (job.status === 'awaiting-review' && !confirm('该任务有待确认的分组，删除后将丢弃这些分组，确定？')) return;
+  if (job.status === 'awaiting-review') {
+    askConfirm('该任务有待确认的分组，删除后将丢弃这些分组，确定？', () => void doRemoveJob(job));
+    return;
+  }
+  await doRemoveJob(job);
+}
+
+async function doRemoveJob(job: OrganizeJob) {
   busy.value = true;
   try {
     await sendMessage('deleteJob', job.id);
@@ -562,5 +585,35 @@ onUnmounted(() => clearInterval(timer));
         </div>
       </div>
     </aside>
+
+    <!-- 确认弹层（替代原生 confirm） -->
+    <div
+      v-if="confirmState"
+      class="fixed inset-0 z-50 grid place-items-center bg-slate-900/40 p-6"
+      @click.self="confirmState = null"
+    >
+      <div class="w-full max-w-sm rounded-xl bg-white p-4 shadow-xl space-y-3">
+        <p class="text-sm font-medium">确认操作</p>
+        <p class="text-xs text-slate-600 leading-relaxed whitespace-pre-line">{{ confirmState.text }}</p>
+        <div class="flex justify-end gap-2">
+          <button class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50" @click="confirmState = null">取消</button>
+          <button class="px-3 py-1.5 rounded-lg bg-red-500 text-white text-xs font-medium hover:bg-red-600" @click="runConfirm">确认</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 通知弹层（替代原生 alert） -->
+    <div
+      v-if="noticeMsg"
+      class="fixed inset-0 z-50 grid place-items-center bg-slate-900/40 p-6"
+      @click.self="noticeMsg = ''"
+    >
+      <div class="w-full max-w-sm rounded-xl bg-white p-4 shadow-xl space-y-3">
+        <p class="text-xs text-slate-600 leading-relaxed">{{ noticeMsg }}</p>
+        <div class="flex justify-end">
+          <button class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700" @click="noticeMsg = ''">知道了</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>

@@ -86,26 +86,18 @@ export async function saveEnhancedBookmark(
   let parentId: string;
   let folderPath: string;
 
+  // 专门目录 = 存放策略为 aiFolder 且勾选了「使用专门的 AI 收藏文件夹」
+  const useDedicated = settings.preferences.saveStrategy === 'aiFolder' && settings.preferences.autoFolder;
+
   if (manualPath) {
     // 用户在 popup 里手动指定了完整路径（优先级最高）
     parentId = await resolveFolderPath(manualPath);
     folderPath = manualPath;
-  } else if (settings.preferences.saveStrategy === 'existing') {
-    // 在已有目录树中落位：draft.folder = "永久分区/已有目录/…/新子目录"
-    const segments = draft.folder.split('/').map((x) => x.trim()).filter(Boolean);
-    const [realRoot] = await browser.bookmarks.getTree();
-    const sections = realRoot?.children ?? [];
-    const first = segments[0] ?? '';
-    const section =
-      sections.find((c) => c.title === first) ??
-      sections.find((c) => c.id === '2') ??
-      sections[sections.length - 1];
-    if (!section) throw new Error('未找到可存放的根目录');
-    parentId = section.id;
-    for (const seg of segments.slice(1)) {
-      parentId = (await ensureFolder(parentId, seg)).id;
-    }
-    folderPath = [section.title, ...segments.slice(1)].filter(Boolean).join('/');
+  } else if (!useDedicated) {
+    // 全目录范围（existing 策略，或未勾选「专门的 AI 收藏文件夹」）：
+    // draft.folder 为完整路径（AI 已参考全部目录），首段解析到永久分区，缺失层级自动创建
+    parentId = await resolveFolderPath(draft.folder);
+    folderPath = draft.folder;
   } else {
     const rootId = await ensureRootFolder(settings.preferences.rootFolder);
     const folderName = settings.preferences.autoFolder ? draft.folder : '';
@@ -164,7 +156,7 @@ export async function recomputeFolderPath(bookmarkId: string, meta: BookmarkMeta
 
 /**
  * 普通收藏（非 AI）：不提取正文、不调用模型，直接用页面标题落库。
- * aiFolder 策略 → 「AI 收藏」根目录；existing 策略 → 「其他书签」根目录。
+ * 专门目录（aiFolder 策略且勾选）→ 「AI 收藏」根；其余情况 → 「其他书签」根。
  * 元数据记为未增强（空摘要/标签），之后可随时 AI 增强。
  */
 export async function savePlainBookmark(
@@ -174,9 +166,11 @@ export async function savePlainBookmark(
   manualPath?: string,
 ): Promise<BookmarkMeta> {
   let parentId: string;
+  const useDedicated = settings.preferences.saveStrategy === 'aiFolder' && settings.preferences.autoFolder;
   if (manualPath) {
     parentId = await resolveFolderPath(manualPath);
-  } else if (settings.preferences.saveStrategy === 'existing') {
+  } else if (!useDedicated) {
+    // existing 策略或未勾选「专门的 AI 收藏文件夹」：无 AI 建议可用，落「其他书签」根
     const [realRoot] = await browser.bookmarks.getTree();
     const section =
       realRoot?.children?.find((c) => c.id === '2') ??

@@ -26,6 +26,24 @@ const saving = ref(false);
 const savedFlash = ref(false);
 const usage = ref<Usage>({});
 
+// ---- 自定义弹层（原生 confirm/alert 在无头/自动化环境下会永久阻塞页面）----
+const confirmState = ref<null | { text: string; action: () => void }>(null);
+let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+const notice = ref('');
+function showNotice(text: string) {
+  notice.value = text;
+  clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => (notice.value = ''), 3000);
+}
+function askConfirm(text: string, action: () => void) {
+  confirmState.value = { text, action };
+}
+function runConfirm() {
+  const c = confirmState.value;
+  confirmState.value = null;
+  c?.action();
+}
+
 // 供应商编辑的临时态（不落库，点保存才写）
 const showKey = ref<Record<string, boolean>>({});
 const testing = ref<Record<string, 'testing' | 'ok' | 'fail'>>({});
@@ -71,13 +89,15 @@ function addProvider() {
 
 function removeProvider(id: string) {
   if (!settings.value) return;
-  if (!confirm('确定删除这个供应商？')) return;
-  settings.value.providers = settings.value.providers.filter((p) => p.id !== id);
-  for (const task of ['enhance', 'tldr', 'embedding'] as AiTask[]) {
-    if (settings.value.bindings[task]?.providerId === id) {
-      settings.value.bindings[task] = null;
+  askConfirm('确定删除这个供应商？其任务绑定将一并解除。', () => {
+    if (!settings.value) return;
+    settings.value.providers = settings.value.providers.filter((p) => p.id !== id);
+    for (const task of ['enhance', 'tldr', 'embedding'] as AiTask[]) {
+      if (settings.value.bindings[task]?.providerId === id) {
+        settings.value.bindings[task] = null;
+      }
     }
-  }
+  });
 }
 
 /** 测试连接：申请域名权限 → 拉模型列表 → （可选）最小 chat 验证 */
@@ -170,17 +190,18 @@ async function importSettings(event: Event) {
     const next = settingsSchema.parse(JSON.parse(await file.text()));
     settings.value = await sendMessage('saveSettings', next);
     savedFlash.value = true;
-    setTimeout(() => alert('导入成功'), 100);
+    showNotice('导入成功');
   } catch (e) {
-    alert(`导入失败：${(e as Error).message}`);
+    showNotice(`导入失败：${(e as Error).message}`);
   }
   input.value = '';
 }
 
 async function clearUsageStats() {
-  if (!confirm('清零所有用量统计？')) return;
-  await sendMessage('clearUsage');
-  usage.value = {};
+  askConfirm('清零所有用量统计？', async () => {
+    await sendMessage('clearUsage');
+    usage.value = {};
+  });
 }
 
 const usageRows = computed(() => {
@@ -455,10 +476,26 @@ onMounted(reload);
             <option value="currentTab">在当前标签页打开</option>
           </select>
         </label>
-        <label class="flex items-center gap-2 text-sm">
-          <input type="checkbox" v-model="settings.preferences.autoFolder" class="accent-indigo-600" />
-          按 AI 建议的文件夹分类收藏
-        </label>
+        <div>
+          <label class="flex items-center gap-2 text-sm" :class="settings.preferences.saveStrategy === 'existing' && 'opacity-40'">
+            <input
+              type="checkbox"
+              v-model="settings.preferences.autoFolder"
+              class="accent-indigo-600"
+              :disabled="settings.preferences.saveStrategy === 'existing'"
+            />
+            使用专门的 AI 收藏文件夹
+          </label>
+          <p class="text-[11px] text-slate-400 mt-1 leading-relaxed">
+            {{
+              settings.preferences.saveStrategy === 'existing'
+                ? '当前为全目录存放策略，此开关不生效'
+                : settings.preferences.autoFolder
+                  ? '收藏统一存入上方目录，并按 AI 建议的子文件夹归类'
+                  : '不勾选时，收藏会在全部已有目录中寻找合适位置（必要时新建）'
+            }}
+          </p>
+        </div>
         <label class="flex items-center gap-2 text-sm">
           <input type="checkbox" v-model="settings.preferences.contextMenuEnabled" class="accent-indigo-600" />
           启用右键菜单"AI 智能收藏此页面"
@@ -521,6 +558,30 @@ onMounted(reload);
           </button>
         </div>
       </section>
+    </div>
+
+    <!-- 确认弹层（替代原生 confirm） -->
+    <div
+      v-if="confirmState"
+      class="fixed inset-0 z-50 grid place-items-center bg-slate-900/40 p-6"
+      @click.self="confirmState = null"
+    >
+      <div class="w-full max-w-xs rounded-xl bg-white p-4 shadow-xl space-y-3">
+        <p class="text-sm font-medium">确认操作</p>
+        <p class="text-xs text-slate-600 leading-relaxed">{{ confirmState.text }}</p>
+        <div class="flex justify-end gap-2">
+          <button class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50" @click="confirmState = null">取消</button>
+          <button class="px-3 py-1.5 rounded-lg bg-red-500 text-white text-xs font-medium hover:bg-red-600" @click="runConfirm">确认</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 轻提示（替代原生 alert，3 秒自动消失） -->
+    <div
+      v-if="notice"
+      class="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 px-3.5 py-1.5 rounded-full bg-slate-800 text-white text-xs shadow-lg"
+    >
+      {{ notice }}
     </div>
   </div>
 </template>

@@ -245,8 +245,9 @@ function setupMessageRouter() {
   onMessage('enhanceBookmark', async ({ data }) => {
     const settings = await getSettings();
     // 存放策略为 existing 时，让 AI 从已有目录中挑目标
-    const folders =
-      settings.preferences.saveStrategy === 'existing' ? await listFolderPaths() : undefined;
+    const useAllFolders =
+      settings.preferences.saveStrategy === 'existing' || !settings.preferences.autoFolder;
+    const folders = useAllFolders ? await listFolderPaths() : undefined;
     return enhanceBookmark(settings, data, folders);
   });
 

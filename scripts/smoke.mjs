@@ -270,7 +270,6 @@ try {
     return result;
   });
   console.log(`[smoke] 预置 ${seeded.ids.length} 条书签 ✓`);
-  console.log(`[smoke] 预置 ${seeded.ids.length} 条书签 ✓`);
 
   // 3.4 旧格式设置迁移：写入 v0.3.0 形状的设置 → 加载并保存不应报错，且新字段自动补齐
   await withPage(async (page) => {
@@ -453,6 +452,41 @@ try {
     s2.preferences.saveStrategy = 'aiFolder';
     await page.evaluate(send('saveSettings', s2));
     await page.evaluate(send('deleteBookmark', meta.bookmarkId));
+  });
+
+  // 5.6 不勾选「使用专门的 AI 收藏文件夹」→ 全目录范围落点
+  await withPage(async (page) => {
+    const s = await page.evaluate(send('getSettings'));
+    s.preferences.saveStrategy = 'aiFolder';
+    s.preferences.autoFolder = false;
+    await page.evaluate(send('saveSettings', s));
+
+    const meta = await page.evaluate(send('saveBookmark', {
+      page: {
+        url: 'https://example.com/alldirs-test', title: '原标题', siteName: 'example.com',
+        byline: '', excerpt: '', content: '', selection: '', extractedAt: Date.now(),
+      },
+      draft: { title: '全目录测试书签', summary: 'x', tags: ['t'], folder: '其他书签/长列表文件夹' },
+    }));
+    const node = await page.evaluate(`chrome.bookmarks.get(${JSON.stringify(meta.bookmarkId)}).then(r => r[0])`);
+    const parent = await page.evaluate(`chrome.bookmarks.get(${JSON.stringify(node.parentId)}).then(r => r[0])`);
+    const grandpa = await page.evaluate(`chrome.bookmarks.get(${JSON.stringify(parent.parentId)}).then(r => r[0])`);
+    const okAllDirs = parent.title === '长列表文件夹' && grandpa.title !== 'AI 收藏';
+    console.log(`[smoke] 不勾选专门目录落点: ${okAllDirs ? '✓' : '✗'}（${grandpa.title}/${parent.title}）`);
+    if (!okAllDirs) errors.push(`不勾选专门目录落点错误: ${grandpa.title}/${parent.title}`);
+
+    const s2 = await page.evaluate(send('getSettings'));
+    s2.preferences.autoFolder = true;
+    await page.evaluate(send('saveSettings', s2));
+    await page.evaluate(send('deleteBookmark', meta.bookmarkId));
+    // 清掉残留的空文件夹（deleteBookmark 只删书签）：
+    // 8.7 会按文本找「长列表文件夹」行，空文件夹行没有展开箭头，
+    // 误点行内「新建子文件夹」会触发原生 prompt，headless 下页面永久冻结
+    await page.evaluate(`(async () => {
+      const other = (await chrome.bookmarks.getTree())[0].children.find((c) => c.id === '2');
+      const leftover = (other?.children ?? []).find((c) => !c.url && c.title === '长列表文件夹');
+      if (leftover && !leftover.children?.length) await chrome.bookmarks.remove(leftover.id);
+    })()`);
   });
 
   // 6. 自动分类 + 撤销
@@ -702,21 +736,27 @@ try {
     await mp4.setViewport({ width: 1280, height: 700 });
     await mp4.goto(`chrome-extension://${extensionId}/manager.html`, { waitUntil: 'networkidle0' });
     await new Promise((r) => setTimeout(r, 600));
-    await mp4.evaluate(`(async () => {
+    const folderId = await mp4.evaluate(`(async () => {
       await chrome.bookmarks.create({ parentId: '1', title: '定位测试书签', url: 'http://127.0.0.1:${mockServer.port}/ok/locate' });
       const other = (await chrome.bookmarks.getTree())[0].children.find((c) => c.id === '2');
       const folder = await chrome.bookmarks.create({ parentId: other.id, title: '长列表文件夹' });
       for (let i = 0; i < 60; i++) {
         await chrome.bookmarks.create({ parentId: folder.id, title: '填充 ' + i, url: 'http://example.com/' + i });
       }
+      return folder.id;
     })()`);
     await mp4.reload({ waitUntil: 'networkidle0' });
     await new Promise((r) => setTimeout(r, 600));
-    // 展开「长列表文件夹」（根分区默认已展开，无需再点）
-    await mp4.evaluate(() => {
-      const row = [...document.querySelectorAll('div[data-node-id]')].find((el) => el.textContent?.includes('长列表文件夹'));
-      row?.querySelector('button')?.click();
-    });
+    // 展开新建的「长列表文件夹」（按 id 精确定位：树里可能残留同名空文件夹，
+    // 且空文件夹行没有展开箭头 button，按文本匹配会误点到「新建子文件夹」触发原生 prompt，
+    // 在 headless 下无人响应会永久冻结页面）
+    await mp4.evaluate(`(async () => {
+      const row = document.querySelector('div[data-node-id="${folderId}"]');
+      if (!row) throw new Error('未找到新建的长列表文件夹行');
+      const arrow = row.querySelector('button');
+      if (!arrow) throw new Error('文件夹行没有展开箭头（子节点未加载？）');
+      arrow.click();
+    })()`);
     await new Promise((r) => setTimeout(r, 200));
     await mp4.evaluate(() => {
       const aside = document.querySelector('aside');
@@ -726,7 +766,7 @@ try {
     // 在「长列表文件夹」行上派发真实 drop 事件（走应用 onDropOn 全路径）
     await mp4.evaluate(`(async () => {
       const [bm] = await chrome.bookmarks.search({ title: '定位测试书签' });
-      const row = [...document.querySelectorAll('div[data-node-id]')].find((el) => el.textContent?.includes('长列表文件夹'));
+      const row = document.querySelector('div[data-node-id="${folderId}"]');
       if (!row) throw new Error('未找到目标行');
       const dt = new DataTransfer();
       dt.setData('application/x-ab-node', JSON.stringify({ type: 'bookmark', id: bm.id }));
@@ -754,11 +794,11 @@ try {
     else if (!result.inAsideView) errors.push('移动后未定位到目标行（仍在顶部或可视区外）');
 
     // 右键新建书签（文件夹 → 🔖 新建书签 → 表单 → 创建）
-    await mp4.evaluate(() => {
-      const row = [...document.querySelectorAll('div[data-node-id]')].find((el) => el.textContent?.includes('长列表文件夹'));
+    await mp4.evaluate(`(async () => {
+      const row = document.querySelector('div[data-node-id="${folderId}"]');
       if (!row) throw new Error('未找到长列表文件夹行');
       row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 200, clientY: 150 }));
-    });
+    })()`);
     await new Promise((r) => setTimeout(r, 200));
     await mp4.evaluate(() => {
       const btn = [...document.querySelectorAll('button')].find((el) => el.textContent?.includes('新建书签'));
@@ -797,12 +837,82 @@ try {
     await new Promise((r) => setTimeout(r, 200));
     const mMenu = await mp4.evaluate(() => document.body.innerText);
     const mWin = mMenu.includes('新窗口打开') && mMenu.includes('无痕窗口打开');
-    const mDyn = mMenu.includes('当前窗口打开');
+    const mDyn = mMenu.includes('当前标签页打开');
     const mNoDup = !mMenu.includes('新标签页打开');
     console.log(`[smoke] 管理页右键窗口项=${mWin ? '✓' : '✗'} 动态项=${mDyn ? '✓' : '✗'} 去重=${mNoDup ? '✓' : '✗'}`);
     if (!mWin) errors.push('管理页右键缺少新窗口/无痕窗口项');
     if (!mDyn) errors.push('管理页右键缺少动态打开项');
     if (!mNoDup) errors.push('newTab 模式下管理页右键仍显示新标签页打开');
+
+    // 行内「＋新建子文件夹」/右键「重命名」走自定义弹层（原生 prompt 会让无头页面永久冻结，冒烟直接挂死）
+    await mp4.evaluate(`(async () => {
+      const row = document.querySelector('div[data-node-id="${folderId}"]');
+      if (!row) throw new Error('未找到长列表文件夹行');
+      row.querySelector('button[title="新建子文件夹"]')?.click();
+    })()`);
+    await new Promise((r) => setTimeout(r, 300));
+    const layerShown = await mp4.evaluate(() => {
+      const dialog = [...document.querySelectorAll('.fixed.inset-0')].find((el) =>
+        el.textContent?.includes('新建子文件夹') && el.querySelector('input[placeholder="文件夹名称"]'),
+      );
+      return !!dialog;
+    });
+    console.log(`[smoke] 新建子文件夹弹层: ${layerShown ? '✓' : '✗'}`);
+    if (!layerShown) errors.push('点击「新建子文件夹」未弹出自定义弹层（疑似原生 prompt）');
+    await mp4.evaluate(() => {
+      const input = document.querySelector('input[placeholder="文件夹名称"]');
+      if (!input) throw new Error('弹层输入框未找到');
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      setter.call(input, '弹层新建文件夹');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await mp4.evaluate(() => {
+      [...document.querySelectorAll('button')].find((el) => el.textContent?.trim() === '创建')?.click();
+    });
+    await new Promise((r) => setTimeout(r, 600));
+    const subCreated = await mp4.evaluate(`(async () => {
+      const [folder] = await chrome.bookmarks.search({ title: '弹层新建文件夹' });
+      return !!folder && folder.parentId === '${folderId}';
+    })()`);
+    console.log(`[smoke] 弹层新建子文件夹落地: ${subCreated ? '✓' : '✗'}`);
+    if (!subCreated) errors.push('弹层新建子文件夹未创建或落点错误');
+
+    // 右键 → 重命名 → 自定义弹层
+    await mp4.evaluate(`(async () => {
+      const row = [...document.querySelectorAll('div[data-node-id]')].find((el) => el.textContent?.includes('弹层新建文件夹'));
+      if (!row) throw new Error('未找到弹层新建的文件夹行');
+      row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 200, clientY: 150 }));
+    })()`);
+    await new Promise((r) => setTimeout(r, 200));
+    await mp4.evaluate(() => {
+      [...document.querySelectorAll('button')].find((el) => el.textContent?.includes('重命名'))?.click();
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    const renameShown = await mp4.evaluate(() => {
+      const input = document.querySelector('input[placeholder="文件夹名称"]');
+      return !!input && input.value === '弹层新建文件夹';
+    });
+    console.log(`[smoke] 重命名弹层: ${renameShown ? '✓' : '✗'}`);
+    if (!renameShown) errors.push('重命名未弹出自定义弹层（疑似原生 prompt）');
+    await mp4.evaluate(() => {
+      const input = document.querySelector('input[placeholder="文件夹名称"]');
+      if (!input) throw new Error('重命名输入框未找到');
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      setter.call(input, '弹层改名后');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await mp4.evaluate(() => {
+      [...document.querySelectorAll('button')].find((el) => el.textContent?.trim() === '保存')?.click();
+    });
+    await new Promise((r) => setTimeout(r, 600));
+    const renamed = await mp4.evaluate(`(async () => {
+      const [before] = await chrome.bookmarks.search({ title: '弹层新建文件夹' });
+      const [after] = await chrome.bookmarks.search({ title: '弹层改名后' });
+      return !before && !!after;
+    })()`);
+    console.log(`[smoke] 弹层重命名生效: ${renamed ? '✓' : '✗'}`);
+    if (!renamed) errors.push('弹层重命名未生效');
+    await mp4.evaluate(`chrome.bookmarks.removeTree('${folderId}')`);
     await mp4.close();
   }
 
@@ -911,7 +1021,7 @@ try {
     await new Promise((r) => setTimeout(r, 200));
     const deleteMenuText = await pp.evaluate(() => document.body.innerText);
     const winItemsOk = deleteMenuText.includes('新窗口打开') && deleteMenuText.includes('无痕窗口打开');
-    const dynOk = deleteMenuText.includes('当前窗口打开');
+    const dynOk = deleteMenuText.includes('当前标签页打开');
     const noDup = !deleteMenuText.includes('新标签页打开'); // 左键已是新标签页 → 菜单不重复显示
     console.log(`[smoke] 书签菜单窗口项=${winItemsOk ? '✓' : '✗'} 动态项=${dynOk ? '✓' : '✗'} 去重=${noDup ? '✓' : '✗'}`);
     if (!winItemsOk) errors.push('书签右键缺少新窗口/无痕窗口项');
