@@ -614,6 +614,19 @@ try {
       renamed = await mp3.evaluate(`chrome.bookmarks.search('【游戏】').then(r => r.length > 0)`);
       if (renamed) break;
     }
+    // 运行中切 tab：不应中断，结果最终仍写入
+    await mp3.evaluate(() => {
+      [...document.querySelectorAll('button')].find((el) => el.textContent?.includes('🔖 书签'))?.click();
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    await mp3.evaluate(() => {
+      [...document.querySelectorAll('button')].find((el) => el.textContent?.includes('🤖 助手'))?.click();
+    });
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      renamed = await mp3.evaluate(`chrome.bookmarks.search('【游戏】').then(r => r.length > 0)`);
+      if (renamed) break;
+    }
     const chatText = await mp3.evaluate(() => document.body.innerText);
     const replied = chatText.includes('重命名 1 条');
     console.log(`[smoke] 对话 agent: 重命名=${renamed ? '✓' : '✗'} 回复=${replied ? '✓' : '✗'}`);

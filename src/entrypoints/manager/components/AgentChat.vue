@@ -1,22 +1,9 @@
 <script lang="ts">
 /**
- * 模块级输入草稿：切换视图（组件卸载重建）后仍保留，刷新页面才清空。
- * 放在模块作用域而非组件实例，保证跨挂载存活。
+ * 模块级状态：切换视图（组件卸载重建）后仍保留——输入草稿、会话列表、
+ * 以及运行中的 agent 轮次（后台循环不受影响，回来时进度照在）。
  */
-let inputDraft = '';
-</script>
-
-<script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue';
-import { browser } from 'wxt/browser';
-import { startStream } from '../../../shared/stream';
-import type { ChatMessage } from '../../../core/providers/client';
-import { sendMessage } from '../../../shared/messages';
-import {
-  AI_TASK_LABELS,
-  type ProviderConfig,
-  type Settings,
-} from '../../../core/storage/settings';
+import { ref } from 'vue';
 
 /** 展示条目：普通消息或工具活动徽章 */
 interface ChatItem {
@@ -33,6 +20,28 @@ interface Conversation {
   /** 完整 API 会话（含 tool 消息），每轮结束后持久化 */
   history: ChatMessage[];
 }
+
+let inputDraft = '';
+const conversations = ref<Conversation[]>([]);
+const activeId = ref<string>('');
+const running = ref(false);
+const errorMsg = ref<string>('');
+const turnStartedAt = ref<number>(0);
+const elapsed = ref<number>(0);
+let elapsedTimer: ReturnType<typeof setInterval> | undefined;
+</script>
+
+<script setup lang="ts">
+import { computed, nextTick, onMounted, watch } from 'vue';
+import { browser } from 'wxt/browser';
+import { startStream } from '../../../shared/stream';
+import type { ChatMessage } from '../../../core/providers/client';
+import { sendMessage } from '../../../shared/messages';
+import {
+  AI_TASK_LABELS,
+  type ProviderConfig,
+  type Settings,
+} from '../../../core/storage/settings';
 
 const STORE_KEY = 'agentConversations';
 const ACTIVE_KEY = 'agentActiveId';
@@ -86,7 +95,6 @@ function newConversation(): Conversation {
 }
 
 function switchTo(id: string) {
-  if (running.value) return;
   activeId.value = id;
   errorMsg.value = '';
   void persistAll();
@@ -94,7 +102,6 @@ function switchTo(id: string) {
 }
 
 function createConversation() {
-  if (running.value) return;
   const convo = newConversation();
   conversations.value.unshift(convo);
   activeId.value = convo.id;
@@ -145,6 +152,14 @@ async function send() {
   const userMsg: ChatMessage = { role: 'user', content: text };
   const runHistory = [...convo.history, userMsg];
 
+  // 等待反馈计时
+  turnStartedAt.value = Date.now();
+  elapsed.value = 0;
+  clearInterval(elapsedTimer);
+  elapsedTimer = setInterval(() => {
+    elapsed.value = Math.round((Date.now() - turnStartedAt.value) / 1000);
+  }, 1000);
+
   const assistantIdx = convo.items.push({ role: 'assistant', text: '' }) - 1;
   await persistAll();
   await scrollToBottom();
@@ -169,6 +184,7 @@ async function send() {
         convo.items[assistantIdx]!.text = finalText || convo.items[assistantIdx]!.text || '（无回复）';
         convo.history = [...runHistory, ...newMessages];
         running.value = false;
+        clearInterval(elapsedTimer);
         void persistAll();
         void scrollToBottom();
       },
@@ -176,6 +192,7 @@ async function send() {
         errorMsg.value = message;
         if (!convo.items[assistantIdx]!.text) convo.items.splice(assistantIdx, 1);
         running.value = false;
+        clearInterval(elapsedTimer);
         void persistAll();
       },
     },
@@ -335,9 +352,19 @@ watch(
           <div v-else class="flex justify-start">
             <div
               class="max-w-[85%] px-3 py-2 rounded-2xl rounded-bl-sm bg-white border border-slate-200 text-sm leading-relaxed whitespace-pre-wrap break-words"
-              :class="running && i === (active?.items.length ?? 0) - 1 && 'animate-pulse'"
             >
-              {{ item.text || '…' }}
+              <div
+                v-if="!item.text && running && i === (active?.items.length ?? 0) - 1"
+                class="flex items-center gap-2 text-xs text-slate-400"
+              >
+                <span class="typing-dots"><span>●</span><span>●</span><span>●</span></span>
+                <span>思考中… {{ elapsed }}s（可切到其他标签页，执行不会中断）</span>
+              </div>
+              <template v-else>{{ item.text }}<span
+                  v-if="running && i === (active?.items.length ?? 0) - 1"
+                  class="animate-pulse text-indigo-500"
+                  >▍</span
+                ></template>
             </div>
           </div>
         </template>
