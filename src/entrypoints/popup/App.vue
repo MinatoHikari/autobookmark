@@ -337,6 +337,81 @@ function showToast(msg: string) {
   toastTimer = setTimeout(() => (toast.value = ''), 1400);
 }
 
+// ---- 右键新建（子文件夹 / 书签）----
+const newFolderForm = ref<{ node: TreeNodeDto; name: string } | null>(null);
+const newBookmarkForm = ref<{ node: TreeNodeDto; title: string; url: string } | null>(null);
+const createError = ref('');
+
+function nodeFolderPath(node: TreeNodeDto): string {
+  const walk = (nodes: TreeNodeDto[], parents: string[]): string | null => {
+    for (const n of nodes) {
+      const path = [...parents, n.title].join('/');
+      if (n.id === node.id) return path;
+      if (!n.url) {
+        const hit = walk(n.children, [...parents, n.title]);
+        if (hit) return hit;
+      }
+    }
+    return null;
+  };
+  return walk(treeNodes.value, []) ?? '其他书签';
+}
+
+function ctxCreateFolder(node: TreeNodeDto) {
+  ctxMenu.value = null;
+  createError.value = '';
+  newFolderForm.value = { node, name: '' };
+}
+
+async function confirmCreateFolder() {
+  const form = newFolderForm.value;
+  const name = form?.name.trim();
+  if (!form || !name) {
+    createError.value = '文件夹名称不能为空';
+    return;
+  }
+  try {
+    await sendMessage('createFolder', { parentId: form.node.id, title: name });
+    newFolderForm.value = null;
+    await reloadTree();
+    showToast('文件夹已创建');
+  } catch (e) {
+    createError.value = (e as Error).message;
+  }
+}
+
+function ctxCreateBookmark(node: TreeNodeDto) {
+  ctxMenu.value = null;
+  createError.value = '';
+  newBookmarkForm.value = { node, title: '', url: '' };
+}
+
+async function confirmCreateBookmark() {
+  const form = newBookmarkForm.value;
+  const title = form?.title.trim();
+  const url = form?.url.trim();
+  if (!form || !title) {
+    createError.value = '标题不能为空';
+    return;
+  }
+  if (!url || !/^https?:\/\//i.test(url)) {
+    createError.value = '链接必须以 http:// 或 https:// 开头';
+    return;
+  }
+  try {
+    await sendMessage('savePlainBookmark', {
+      url,
+      title,
+      folderPath: nodeFolderPath(form.node),
+    });
+    newBookmarkForm.value = null;
+    await reloadTree();
+    showToast('书签已创建');
+  } catch (e) {
+    createError.value = (e as Error).message;
+  }
+}
+
 // ---- 右键删除（popup 内自定义二次确认，原生 confirm 会让 popup 失焦关闭）----
 const confirmDelete = ref<{ node: TreeNodeDto } | null>(null);
 
@@ -943,6 +1018,20 @@ onMounted(async () => {
           <button
             v-if="!ctxMenu.node.url"
             class="w-full flex items-center justify-between px-3 py-1.5 text-xs text-slate-700 hover:bg-indigo-50"
+            @click="ctxCreateFolder(ctxMenu.node)"
+          >
+            <span>新建子文件夹</span><span class="text-slate-400">＋</span>
+          </button>
+          <button
+            v-if="!ctxMenu.node.url"
+            class="w-full flex items-center justify-between px-3 py-1.5 text-xs text-slate-700 hover:bg-indigo-50"
+            @click="ctxCreateBookmark(ctxMenu.node)"
+          >
+            <span>新建书签</span><span class="text-slate-400">🔖</span>
+          </button>
+          <button
+            v-if="!ctxMenu.node.url"
+            class="w-full flex items-center justify-between px-3 py-1.5 text-xs text-slate-700 hover:bg-indigo-50"
             @click="ctxToggle(ctxMenu.node)"
           >
             <span>{{ treeExpanded.has(ctxMenu.node.id) ? '收起' : '展开' }}</span>
@@ -972,6 +1061,59 @@ onMounted(async () => {
       @close="ctxEditNode = null"
       @saved="reloadTree()"
     />
+
+    <!-- 新建子文件夹弹层 -->
+    <div
+      v-if="newFolderForm"
+      class="fixed inset-0 z-50 grid place-items-center bg-slate-900/40 p-6"
+      @click.self="newFolderForm = null"
+    >
+      <div class="w-full max-w-xs rounded-xl bg-white p-4 shadow-xl space-y-3">
+        <p class="text-sm font-medium">新建子文件夹</p>
+        <p class="text-[11px] text-slate-400">位置：{{ newFolderForm.node.title }}</p>
+        <p v-if="createError" class="px-2.5 py-1.5 rounded-lg bg-red-50 text-red-600 text-xs">{{ createError }}</p>
+        <input
+          v-model="newFolderForm.name"
+          autofocus
+          placeholder="文件夹名称"
+          class="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:border-indigo-400"
+          @keydown.enter="confirmCreateFolder"
+        />
+        <div class="flex justify-end gap-2">
+          <button class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600" @click="newFolderForm = null">取消</button>
+          <button class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700" @click="confirmCreateFolder">创建</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 新建书签弹层 -->
+    <div
+      v-if="newBookmarkForm"
+      class="fixed inset-0 z-50 grid place-items-center bg-slate-900/40 p-6"
+      @click.self="newBookmarkForm = null"
+    >
+      <div class="w-full max-w-xs rounded-xl bg-white p-4 shadow-xl space-y-3">
+        <p class="text-sm font-medium">新建书签</p>
+        <p class="text-[11px] text-slate-400">位置：{{ nodeFolderPath(newBookmarkForm.node) }}</p>
+        <p v-if="createError" class="px-2.5 py-1.5 rounded-lg bg-red-50 text-red-600 text-xs">{{ createError }}</p>
+        <input
+          v-model="newBookmarkForm.title"
+          autofocus
+          placeholder="标题"
+          class="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:border-indigo-400"
+        />
+        <input
+          v-model="newBookmarkForm.url"
+          placeholder="https://…"
+          class="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm font-mono focus:outline-none focus:border-indigo-400"
+          @keydown.enter="confirmCreateBookmark"
+        />
+        <div class="flex justify-end gap-2">
+          <button class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600" @click="newBookmarkForm = null">取消</button>
+          <button class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700" @click="confirmCreateBookmark">创建</button>
+        </div>
+      </div>
+    </div>
 
     <!-- 删除二次确认 -->
     <div

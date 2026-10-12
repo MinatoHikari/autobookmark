@@ -877,6 +877,80 @@ try {
     console.log(`[smoke] popup 删除书签: 确认弹层=${confirmShown ? '✓' : '✗'} 书签已移除=${stillThere ? '✗' : '✓'}`);
     if (!confirmShown) errors.push('删除二次确认弹层未出现');
     if (stillThere) errors.push('确认删除后书签仍存在');
+
+    // 文件夹右键：新建子文件夹 + 新建书签
+    await pp.evaluate(() => {
+      const row = [...document.querySelectorAll('button')].find((el) => el.textContent?.includes('旧分类A'));
+      if (!row) throw new Error('未找到旧分类A行');
+      row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 60, clientY: 100 }));
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    await pp.evaluate(() => {
+      const btn = [...document.querySelectorAll('button')].find((el) => el.textContent?.includes('新建子文件夹'));
+      if (!btn) throw new Error('菜单中未找到新建子文件夹项');
+      btn.click();
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    await pp.evaluate(() => {
+      const input = [...document.querySelectorAll('input')].find((el) => el.placeholder === '文件夹名称');
+      if (!input) throw new Error('未找到文件夹名称输入框');
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      setter.call(input, '冒烟子目录');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await pp.evaluate(() => {
+      [...document.querySelectorAll('button')].find((el) => el.textContent?.trim() === '创建')?.click();
+    });
+    await new Promise((r) => setTimeout(r, 500));
+    const subCreated = await pp.evaluate(`chrome.bookmarks.search({ title: '冒烟子目录' }).then(r => r[0] ?? null).then(async n => {
+      if (!n) return false;
+      const parent = (await chrome.bookmarks.get(n.parentId))[0];
+      return parent.title === '旧分类A';
+    })`);
+    console.log(`[smoke] popup 新建子文件夹: ${subCreated ? '✓' : '✗'}`);
+    if (!subCreated) errors.push('新建子文件夹落点错误或未创建');
+
+    // 新建书签 → 落在该子目录（先展开旧分类A 让子目录行可见）
+    await pp.evaluate(() => {
+      const row = [...document.querySelectorAll('button')].find((el) => el.textContent?.includes('旧分类A'));
+      if (!row) throw new Error('未找到旧分类A行');
+      row.click(); // popup 树整行即展开切换
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    await pp.evaluate(() => {
+      const row = [...document.querySelectorAll('button')].find((el) => el.textContent?.includes('冒烟子目录'));
+      if (!row) throw new Error('未找到冒烟子目录行');
+      row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 60, clientY: 140 }));
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    await pp.evaluate(() => {
+      const btn = [...document.querySelectorAll('button')].find((el) => el.textContent?.includes('新建书签'));
+      if (!btn) throw new Error('菜单中未找到新建书签项');
+      btn.click();
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    await pp.evaluate(() => {
+      const title = [...document.querySelectorAll('input')].find((el) => el.placeholder === '标题');
+      const url = [...document.querySelectorAll('input')].find((el) => el.placeholder === 'https://…');
+      if (!title || !url) throw new Error('未找到新建书签表单');
+      const s1 = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      s1.call(title, '冒烟新建书签');
+      title.dispatchEvent(new Event('input', { bubbles: true }));
+      s1.call(url, 'http://example.com/smoke-new');
+      url.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await pp.evaluate(() => {
+      [...document.querySelectorAll('button')].find((el) => el.textContent?.trim() === '创建')?.click();
+    });
+    await new Promise((r) => setTimeout(r, 500));
+    const bmCreated = await pp.evaluate(`(async () => {
+      const [bm] = await chrome.bookmarks.search({ title: '冒烟新建书签' });
+      if (!bm) return false;
+      const folder = (await chrome.bookmarks.get(bm.parentId))[0];
+      return folder.title === '冒烟子目录';
+    })()`);
+    console.log(`[smoke] popup 新建书签: ${bmCreated ? '✓' : '✗'}`);
+    if (!bmCreated) errors.push('新建书签落点错误或未创建');
     await pp.close();
   });
 } finally {
