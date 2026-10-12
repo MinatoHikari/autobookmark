@@ -593,6 +593,33 @@ try {
     console.log(`[smoke] 对话 agent: 重命名=${renamed ? '✓' : '✗'} 回复=${replied ? '✓' : '✗'}`);
     if (!renamed) errors.push('agent 未执行重命名');
     if (!replied) errors.push('agent 未给出总结回复');
+
+    // 切到设置 → 任务绑定：应出现「对话助手」绑定行
+    await mp3.evaluate(() => {
+      [...document.querySelectorAll('button')].find((el) => el.textContent?.includes('⚙ 设置'))?.click();
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    await mp3.evaluate(() => {
+      [...document.querySelectorAll('button')].find((el) => el.textContent?.trim() === '任务绑定')?.click();
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    const settingsText = await mp3.evaluate(() => document.body.innerText);
+    const bindingRow = settingsText.includes('对话助手');
+    console.log(`[smoke] 设置任务绑定含对话助手: ${bindingRow ? '✓' : '✗'}`);
+    if (!bindingRow) errors.push('任务绑定缺少对话助手行');
+
+    // 切回助手：对话从 storage.local 恢复
+    await mp3.evaluate(() => {
+      [...document.querySelectorAll('button')].find((el) => el.textContent?.includes('🤖 助手'))?.click();
+    });
+    await new Promise((r) => setTimeout(r, 1000));
+    const persisted = await mp3.evaluate(() => document.body.innerText.includes('把第一本书签重命名'));
+    console.log(`[smoke] 对话持久化（切 tab 不丢）: ${persisted ? '✓' : '✗'}`);
+    if (!persisted) {
+      const t = await mp3.evaluate(() => document.body.innerText.slice(0, 400));
+      console.log('[smoke] 助手页文本:', JSON.stringify(t));
+      errors.push('切换 tab 后对话内容丢失');
+    }
     await mp3.close();
   }
 

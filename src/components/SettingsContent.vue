@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue';
 import { sendMessage } from '../shared/messages';
 import type { ProviderPreset } from '../core/providers/presets';
 import {
+  AI_TASKS,
   AI_TASK_LABELS,
   settingsSchema,
   type AiTask,
@@ -393,7 +394,7 @@ onMounted(reload);
           /embeddings 接口（DeepSeek 不提供，可留空，搜索将退化为关键词模式）。
         </p>
         <div
-          v-for="task in (['enhance', 'tldr', 'embedding'] as AiTask[])"
+          v-for="task in (AI_TASKS as readonly AiTask[])"
           :key="task"
           class="rounded-xl bg-white border border-slate-200 p-4 space-y-2.5"
         >
