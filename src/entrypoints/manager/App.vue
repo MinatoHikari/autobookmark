@@ -296,19 +296,35 @@ async function ctxEnhance(node: TreeNodeDto) {
   }
 }
 
+// ---- AI 分类进行中状态（持续到任务结束）+ 轻提示 ----
+const classifying = ref<{ title: string } | null>(null);
+const toast = ref('');
+let toastTimer: ReturnType<typeof setTimeout> | undefined;
+
+function showToast(msg: string) {
+  toast.value = msg;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (toast.value = ''), 2200);
+}
+
 async function ctxReclassify(node: TreeNodeDto) {
   if (node.url) {
+    // 提示条从点击一直显示到分类完成（含移动与刷新）
+    classifying.value = { title: node.title };
     try {
       const r = await sendMessage('reclassifyBookmark', node.id);
       if (!r.ok) {
-        alert(r.reason === 'no-candidates' ? '没有可用的目标目录' : 'AI 未能确定目标目录');
+        showToast(r.reason === 'no-candidates' ? '没有可用的目标目录' : 'AI 未能确定目标目录');
         return;
       }
+      await refreshTree();
+      showToast(`已移动到「${r.folder}」`);
     } catch (e) {
-      alert(`分类失败：${(e as Error).message}`);
+      showToast(`分类失败：${(e as Error).message}`);
       return;
+    } finally {
+      classifying.value = null;
     }
-    await refreshTree();
     return;
   }
   // 根分区（书签栏/其他书签）沿用原有 scope；普通文件夹以子树为输入
@@ -597,6 +613,23 @@ onMounted(async () => {
       @close="metaEditNode = null"
       @saved="refreshTree()"
     />
+
+    <!-- AI 分类进行中状态条 -->
+    <div
+      v-if="classifying"
+      class="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-indigo-600 text-white text-xs shadow-lg"
+    >
+      <span class="typing-dots"><span>●</span><span>●</span><span>●</span></span>
+      AI 正在分类「{{ classifying.title }}」…
+    </div>
+
+    <!-- 轻提示 -->
+    <div
+      v-if="toast"
+      class="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 px-3.5 py-1.5 rounded-full bg-slate-800 text-white text-xs shadow-lg"
+    >
+      {{ toast }}
+    </div>
 
     <!-- 新建书签弹层 -->
     <div
