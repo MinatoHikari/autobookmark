@@ -788,6 +788,19 @@ try {
     })()`);
     console.log(`[smoke] 管理页新建书签: ${bmCreated ? '✓' : '✗'}`);
     if (!bmCreated) errors.push('管理页新建书签落点错误或未创建');
+
+    await mp4.evaluate(() => {
+      const row = [...document.querySelectorAll('div[data-node-id]')].find((el) => el.textContent?.includes('管理页新建书签'));
+      if (!row) throw new Error('未找到书签行');
+      row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 200, clientY: 150 }));
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    const mMenu = await mp4.evaluate(() => document.body.innerText);
+    const mWin = mMenu.includes('新窗口打开') && mMenu.includes('无痕窗口打开');
+    const mDyn = mMenu.includes('当前窗口打开');
+    console.log(`[smoke] 管理页右键窗口项=${mWin ? '✓' : '✗'} 动态项=${mDyn ? '✓' : '✗'}`);
+    if (!mWin) errors.push('管理页右键缺少新窗口/无痕窗口项');
+    if (!mDyn) errors.push('管理页右键缺少动态打开项');
     await mp4.close();
   }
 
@@ -894,6 +907,12 @@ try {
       row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 60, clientY: 120 }));
     });
     await new Promise((r) => setTimeout(r, 200));
+    const deleteMenuText = await pp.evaluate(() => document.body.innerText);
+    const winItemsOk = deleteMenuText.includes('新窗口打开') && deleteMenuText.includes('无痕窗口打开');
+    const dynOk = deleteMenuText.includes('当前窗口打开');
+    console.log(`[smoke] 书签菜单窗口项=${winItemsOk ? '✓' : '✗'} 动态项=${dynOk ? '✓' : '✗'}`);
+    if (!winItemsOk) errors.push('书签右键缺少新窗口/无痕窗口项');
+    if (!dynOk) errors.push('书签右键缺少动态打开项');
     await pp.evaluate(() => {
       const btn = [...document.querySelectorAll('button')].find(
         (el) => el.textContent?.includes('删除') && !el.textContent.includes('确认'),

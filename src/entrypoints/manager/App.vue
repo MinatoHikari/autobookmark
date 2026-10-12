@@ -11,7 +11,8 @@ import OrganizePanel from './components/OrganizePanel.vue';
 import MetaEditDialog from '../../components/MetaEditDialog.vue';
 import AgentChat from './components/AgentChat.vue';
 import SettingsContent from '../../components/SettingsContent.vue';
-import { faviconUrl, formatTime } from '../../shared/ui';
+import { faviconUrl, formatTime, openInCurrentTab, openInWindow } from '../../shared/ui';
+import type { Settings } from '../../core/storage/settings';
 
 const tree = ref<TreeNodeDto[]>([]);
 const treeAside = ref<HTMLElement | null>(null);
@@ -209,6 +210,19 @@ async function openUrl(url: string) {
 
 // ---- 树右键菜单 ----
 const ctxMenu = ref<{ node: TreeNodeDto; x: number; y: number } | null>(null);
+const managerSettings = ref<Settings | null>(null);
+const openModeLabel = computed(() =>
+  managerSettings.value?.preferences.bookmarkOpenMode === 'currentTab' ? '新标签页打开' : '当前窗口打开',
+);
+
+async function ctxOpenWhere(node: TreeNodeDto, where: 'current' | 'newTab' | 'window' | 'incognito') {
+  ctxMenu.value = null;
+  const url = node.url ?? '';
+  if (!url) return;
+  if (where === 'current') await openInCurrentTab(url);
+  else if (where === 'newTab') await openUrl(url);
+  else await openInWindow(url, where === 'incognito');
+}
 
 function openCtxMenu(payload: { node: TreeNodeDto; x: number; y: number }) {
   // 防止菜单超出视口
@@ -371,6 +385,7 @@ browser.storage.onChanged.addListener((changes, area) => {
 
 onMounted(async () => {
   try {
+    managerSettings.value = await sendMessage('getSettings');
     await refreshTree(false);
   } catch (e) {
     errorMsg.value = (e as Error).message;
@@ -577,6 +592,34 @@ onMounted(async () => {
           @click="menuAction('open')"
         >
           🔗 打开
+        </button>
+        <button
+          v-if="ctxMenu.node.url && managerSettings?.preferences.bookmarkOpenMode === 'newTab'"
+          class="w-full text-left px-3 py-1.5 hover:bg-indigo-50 hover:text-indigo-700"
+          @click="ctxOpenWhere(ctxMenu.node, 'current')"
+        >
+          当前窗口打开
+        </button>
+        <button
+          v-if="ctxMenu.node.url && managerSettings?.preferences.bookmarkOpenMode === 'currentTab'"
+          class="w-full text-left px-3 py-1.5 hover:bg-indigo-50 hover:text-indigo-700"
+          @click="ctxOpenWhere(ctxMenu.node, 'newTab')"
+        >
+          新标签页打开
+        </button>
+        <button
+          v-if="ctxMenu.node.url"
+          class="w-full text-left px-3 py-1.5 hover:bg-indigo-50 hover:text-indigo-700"
+          @click="ctxOpenWhere(ctxMenu.node, 'window')"
+        >
+          新窗口打开
+        </button>
+        <button
+          v-if="ctxMenu.node.url"
+          class="w-full text-left px-3 py-1.5 hover:bg-indigo-50 hover:text-indigo-700"
+          @click="ctxOpenWhere(ctxMenu.node, 'incognito')"
+        >
+          无痕窗口打开
         </button>
         <button
           class="w-full text-left px-3 py-1.5 hover:bg-indigo-50 hover:text-indigo-700"

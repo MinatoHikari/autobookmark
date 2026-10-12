@@ -5,7 +5,7 @@ import { sendMessage } from '../../shared/messages';
 import { startStream } from '../../shared/stream';
 import type { BookmarkDraft, BookmarkMeta, PageContent } from '../../shared/types';
 import type { Settings } from '../../core/storage/settings';
-import { faviconUrl, formatTime, hostOf, tooltipIfTruncated } from '../../shared/ui';
+import { faviconUrl, formatTime, hostOf, tooltipIfTruncated, openInCurrentTab, openInWindow } from '../../shared/ui';
 import { resolveDropTarget, setNodeDropHandler, type TreeDropEvent } from '../../shared/dnd';
 import { findNode, flattenBookmarks } from '../../core/organize/scan';
 import type { MetaBrief, SearchResultItem, TreeNodeDto } from '../../shared/types';
@@ -456,6 +456,16 @@ function openCtxMenu(payload: { node: TreeNodeDto; x: number; y: number }) {
     x: Math.min(payload.x, 660 - 224),
     y: Math.min(payload.y, window.innerHeight - 320),
   };
+}
+
+async function ctxOpenWhere(node: TreeNodeDto, where: 'current' | 'newTab' | 'window' | 'incognito') {
+  ctxMenu.value = null;
+  const url = node.url ?? '';
+  if (!url) return;
+  if (where === 'current') await openInCurrentTab(url);
+  else if (where === 'newTab') await browser.tabs.create({ url });
+  else await openInWindow(url, where === 'incognito');
+  window.close();
 }
 
 function ctxOpen(node: TreeNodeDto) {
@@ -1024,6 +1034,34 @@ onMounted(async () => {
             @click="ctxOpen(ctxMenu.node)"
           >
             <span>新标签页中打开</span><span class="text-slate-400">↗</span>
+          </button>
+          <button
+            v-if="ctxMenu.node.url && settings?.preferences.bookmarkOpenMode === 'newTab'"
+            class="w-full flex items-center justify-between px-3 py-1.5 text-xs text-slate-700 hover:bg-indigo-50"
+            @click="ctxOpenWhere(ctxMenu.node, 'current')"
+          >
+            <span>当前窗口打开</span><span class="text-slate-400">⇱</span>
+          </button>
+          <button
+            v-if="ctxMenu.node.url && settings?.preferences.bookmarkOpenMode === 'currentTab'"
+            class="w-full flex items-center justify-between px-3 py-1.5 text-xs text-slate-700 hover:bg-indigo-50"
+            @click="ctxOpenWhere(ctxMenu.node, 'newTab')"
+          >
+            <span>新标签页打开</span><span class="text-slate-400">↗</span>
+          </button>
+          <button
+            v-if="ctxMenu.node.url"
+            class="w-full flex items-center justify-between px-3 py-1.5 text-xs text-slate-700 hover:bg-indigo-50"
+            @click="ctxOpenWhere(ctxMenu.node, 'window')"
+          >
+            <span>新窗口打开</span><span class="text-slate-400">❐</span>
+          </button>
+          <button
+            v-if="ctxMenu.node.url"
+            class="w-full flex items-center justify-between px-3 py-1.5 text-xs text-slate-700 hover:bg-indigo-50"
+            @click="ctxOpenWhere(ctxMenu.node, 'incognito')"
+          >
+            <span>无痕窗口打开</span><span class="text-slate-400">🕶</span>
           </button>
           <button
             v-if="ctxMenu.node.url"

@@ -33,3 +33,18 @@ export function tooltipIfTruncated(event: MouseEvent): void {
   const el = event.currentTarget as HTMLElement;
   el.title = el.scrollWidth > el.clientWidth ? (el.textContent ?? '').trim() : '';
 }
+
+/** 在当前标签页打开（覆盖活动标签） */
+export async function openInCurrentTab(url: string): Promise<void> {
+  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+  if (tab?.id) {
+    await browser.tabs.update(tab.id, { url });
+    return;
+  }
+  await browser.tabs.create({ url });
+}
+
+/** 新窗口（incognito = 无痕窗口）打开 */
+export async function openInWindow(url: string, incognito = false): Promise<void> {
+  await browser.windows.create({ url, incognito });
+}
