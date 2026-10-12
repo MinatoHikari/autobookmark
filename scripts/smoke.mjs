@@ -683,6 +683,65 @@ try {
     await mp3.close();
   }
 
+  // 8.7 树移动后定位：真实拖放事件 → onDropOn → 刷新并滚动到新位置
+  {
+    const mp4 = await browser.newPage();
+    await mp4.setViewport({ width: 1280, height: 700 });
+    await mp4.goto(`chrome-extension://${extensionId}/manager.html`, { waitUntil: 'networkidle0' });
+    await new Promise((r) => setTimeout(r, 600));
+    await mp4.evaluate(`(async () => {
+      await chrome.bookmarks.create({ parentId: '1', title: '定位测试书签', url: 'http://127.0.0.1:${mockServer.port}/ok/locate' });
+      const other = (await chrome.bookmarks.getTree())[0].children.find((c) => c.id === '2');
+      const folder = await chrome.bookmarks.create({ parentId: other.id, title: '长列表文件夹' });
+      for (let i = 0; i < 60; i++) {
+        await chrome.bookmarks.create({ parentId: folder.id, title: '填充 ' + i, url: 'http://example.com/' + i });
+      }
+    })()`);
+    await mp4.reload({ waitUntil: 'networkidle0' });
+    await new Promise((r) => setTimeout(r, 600));
+    // 展开「长列表文件夹」（根分区默认已展开，无需再点）
+    await mp4.evaluate(() => {
+      const row = [...document.querySelectorAll('div[data-node-id]')].find((el) => el.textContent?.includes('长列表文件夹'));
+      row?.querySelector('button')?.click();
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    await mp4.evaluate(() => {
+      const aside = document.querySelector('aside');
+      if (aside) aside.scrollTop = 0;
+    });
+
+    // 在「长列表文件夹」行上派发真实 drop 事件（走应用 onDropOn 全路径）
+    await mp4.evaluate(`(async () => {
+      const [bm] = await chrome.bookmarks.search({ title: '定位测试书签' });
+      const row = [...document.querySelectorAll('div[data-node-id]')].find((el) => el.textContent?.includes('长列表文件夹'));
+      if (!row) throw new Error('未找到目标行');
+      const dt = new DataTransfer();
+      dt.setData('application/x-ab-node', JSON.stringify({ type: 'bookmark', id: bm.id }));
+      row.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    })()`);
+    await new Promise((r) => setTimeout(r, 1500)); // 刷新防抖 + 拉取 + scrollIntoView
+
+    const result = await mp4.evaluate(() => {
+      const [bm] = [...document.querySelectorAll('div[data-node-id]')].map((el) => ({
+        el,
+        isTarget: el.textContent?.includes('定位测试书签'),
+      })).filter((x) => x.isTarget);
+      const aside = document.querySelector('aside');
+      if (!bm || !aside) return { found: false };
+      const r = bm.el.getBoundingClientRect();
+      const a = aside.getBoundingClientRect();
+      return {
+        found: true,
+        inAsideView: r.top >= a.top - 1 && r.bottom <= a.bottom + 1,
+        scrollTop: aside.scrollTop,
+      };
+    });
+    console.log(`[smoke] 移动后定位: 行可见=${result.found && result.inAsideView ? '✓' : '✗'}（滚动位置 ${result.scrollTop ?? '-'}px）`);
+    if (!result.found) errors.push('移动后树中未找到被移动书签');
+    else if (!result.inAsideView) errors.push('移动后未定位到目标行（仍在顶部或可视区外）');
+    await mp4.close();
+  }
+
   // 9. openManager
   await withPage(async (page) => {
     const ok = await page.evaluate(send('openManager', ''));

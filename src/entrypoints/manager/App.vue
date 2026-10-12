@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, nextTick, onMounted, ref } from 'vue';
 import { browser } from 'wxt/browser';
 import { sendMessage } from '../../shared/messages';
 import type { MetaBrief, SearchResultItem, TreeNodeDto } from '../../shared/types';
@@ -14,6 +14,13 @@ import SettingsContent from '../../components/SettingsContent.vue';
 import { faviconUrl, formatTime } from '../../shared/ui';
 
 const tree = ref<TreeNodeDto[]>([]);
+const treeAside = ref<HTMLElement | null>(null);
+
+/** 把树滚动到指定节点（保持可视位置，用于移动后定位） */
+async function scrollToTreeNode(id: string) {
+  await nextTick();
+  document.querySelector(`[data-node-id="${id}"]`)?.scrollIntoView({ block: 'nearest' });
+}
 const metaById = ref<Record<string, MetaBrief>>({});
 const selectedId = ref('');
 const expanded = ref(new Set<string>());
@@ -385,7 +392,7 @@ onMounted(async () => {
     <!-- 书签浏览视图 -->
     <div v-if="view === 'bookmarks'" class="flex-1 flex min-h-0">
       <!-- 左：文件夹树 -->
-      <aside class="w-64 shrink-0 overflow-y-auto bg-white border-r border-slate-200 p-2" data-drop-root>
+      <aside ref="treeAside" class="w-64 shrink-0 overflow-y-auto bg-white border-r border-slate-200 p-2" data-drop-root>
         <div v-if="loading" class="space-y-2 p-2">
           <div class="h-5 rounded bg-slate-100 animate-pulse w-3/4"></div>
           <div class="h-5 rounded bg-slate-100 animate-pulse w-1/2"></div>

@@ -49,6 +49,7 @@ function hintClass(node: TreeNodeDto): string {
       class="group select-none"
     >
       <div
+        :data-node-id="node.id"
         class="flex items-center gap-1 rounded-md px-1.5 py-[5px] cursor-pointer text-sm transition-colors"
         :class="[
           selectedId === node.id ? 'bg-indigo-100 text-indigo-800 font-medium' : 'hover:bg-slate-100',
