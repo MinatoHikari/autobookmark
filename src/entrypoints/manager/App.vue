@@ -587,13 +587,6 @@ onMounted(async () => {
           🗂 智能重新分类
         </button>
         <button
-          v-if="ctxMenu.node.url"
-          class="w-full text-left px-3 py-1.5 hover:bg-indigo-50 hover:text-indigo-700"
-          @click="menuAction('open')"
-        >
-          🔗 打开
-        </button>
-        <button
           v-if="ctxMenu.node.url && managerSettings?.preferences.bookmarkOpenMode === 'newTab'"
           class="w-full text-left px-3 py-1.5 hover:bg-indigo-50 hover:text-indigo-700"
           @click="ctxOpenWhere(ctxMenu.node, 'current')"

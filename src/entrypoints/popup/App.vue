@@ -1029,13 +1029,6 @@ onMounted(async () => {
             <span>{{ ctxMenu.node.url ? '编辑' : '重命名' }}</span><span class="text-slate-400">✎</span>
           </button>
           <button
-            v-if="ctxMenu.node.url"
-            class="w-full flex items-center justify-between px-3 py-1.5 text-xs text-slate-700 hover:bg-indigo-50"
-            @click="ctxOpen(ctxMenu.node)"
-          >
-            <span>新标签页中打开</span><span class="text-slate-400">↗</span>
-          </button>
-          <button
             v-if="ctxMenu.node.url && settings?.preferences.bookmarkOpenMode === 'newTab'"
             class="w-full flex items-center justify-between px-3 py-1.5 text-xs text-slate-700 hover:bg-indigo-50"
             @click="ctxOpenWhere(ctxMenu.node, 'current')"
