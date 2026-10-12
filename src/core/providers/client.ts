@@ -1,9 +1,19 @@
 import type { ProviderConfig } from '../storage/settings';
 import { browser } from 'wxt/browser';
 
+export interface ChatToolCall {
+  id: string;
+  type: 'function';
+  function: { name: string; arguments: string };
+}
+
 export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant';
+  role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
+  /** assistant 消息携带的工具调用请求 */
+  tool_calls?: ChatToolCall[];
+  /** role='tool' 时对应请求的 id */
+  tool_call_id?: string;
 }
 
 export interface ChatUsage {
@@ -31,11 +41,15 @@ export interface ChatOptions {
   signal?: AbortSignal;
   /** 传入则启用 SSE 流式，逐段回调 */
   onDelta?: (text: string) => void;
+  /** OpenAI function calling 工具定义（agent 使用） */
+  tools?: unknown[];
 }
 
 export interface ChatResult {
   text: string;
   usage?: ChatUsage;
+  /** 非流式响应的完整 assistant 消息（含 tool_calls） */
+  message?: { content: string | null; tool_calls?: ChatToolCall[] };
 }
 
 function authHeaders(provider: ProviderConfig): Record<string, string> {
@@ -78,6 +92,7 @@ export function createClient(provider: ProviderConfig) {
       stream,
     };
     if (opts.json) body.response_format = { type: 'json_object' };
+    if (opts.tools?.length) body.tools = opts.tools;
     if (stream) body.stream_options = { include_usage: true };
 
     const res = await fetch(`${base}/chat/completions`, {
@@ -90,8 +105,12 @@ export function createClient(provider: ProviderConfig) {
 
     if (!stream) {
       const data = await res.json();
+      const message = data.choices?.[0]?.message;
       return {
-        text: data.choices?.[0]?.message?.content ?? '',
+        text: message?.content ?? '',
+        message: message
+          ? { content: message.content ?? null, tool_calls: message.tool_calls }
+          : undefined,
         usage: data.usage
           ? {
               promptTokens: data.usage.prompt_tokens ?? 0,

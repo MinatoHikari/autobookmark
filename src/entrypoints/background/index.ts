@@ -6,6 +6,8 @@ import { getSettings, saveSettings } from '../../core/storage/settings';
 import { getAllMeta, getMeta, getMetaByHash, hashUrl, putMeta } from '../../core/storage/db';
 import { enhanceBookmark, resolveBinding, NotConfiguredError } from '../../core/ai/enhance';
 import { buildTldrMessages } from '../../core/ai/prompts';
+import { runAgentTurn } from '../../core/ai/agent';
+import type { ChatMessage } from '../../core/providers/client';
 import { trackUsage, getUsage, clearUsage } from '../../core/ai/usage';
 import {
   isUrlBookmarked,
@@ -148,6 +150,19 @@ function setupStreamServer() {
       };
       if (request.task === 'tldr') {
         runTldrStream(request.payload as PageContent, emit, () => port.disconnect()).catch((e) => {
+          emit({ type: 'error', message: (e as Error).message });
+        });
+      }
+      if (request.task === 'agent') {
+        const { history } = request.payload as { history: ChatMessage[] };
+        void (async () => {
+          const settings = await getSettings();
+          const { newMessages } = await runAgentTurn(settings, history, (event) => {
+            if (event.type === 'delta') emit({ type: 'delta', text: event.text });
+            else emit({ type: 'tool', name: event.name, detail: event.detail });
+          });
+          emit({ type: 'done', newMessages });
+        })().catch((e) => {
           emit({ type: 'error', message: (e as Error).message });
         });
       }

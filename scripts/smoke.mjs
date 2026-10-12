@@ -61,6 +61,56 @@ function handleChat(body) {
     const allSame = urls.length > 1 && urls.every((u) => u === urls[0]);
     return chatResponse(JSON.stringify({ duplicates: allSame }));
   }
+  // agent：tools 请求 → 脚本化工具调用循环
+  if (body.tools?.length) {
+    const toolResults = body.messages.filter((m) => m.role === 'tool');
+    const last = toolResults.at(-1);
+    if (!last) {
+      // 第一步：列出书签
+      return {
+        choices: [{
+          message: {
+            role: 'assistant',
+            content: null,
+            tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'list_bookmarks', arguments: '{}' } }],
+          },
+          finish_reason: 'tool_calls',
+        }],
+      };
+    }
+    const lastContent = String(last.content ?? '');
+    if (lastContent.includes('list_bookmarks') || !lastContent.includes('已重命名')) {
+      if (!lastContent.startsWith('{"ok"')) {
+        // 第二步：从 list 结果里取第一条做重命名
+        try {
+          const parsed = JSON.parse(lastContent);
+          const first = parsed.bookmarks?.[0];
+          if (first) {
+            return {
+              choices: [{
+                message: {
+                  role: 'assistant',
+                  content: null,
+                  tool_calls: [{
+                    id: 'call-2',
+                    type: 'function',
+                    function: {
+                      name: 'rename_bookmarks',
+                      arguments: JSON.stringify({ items: [{ id: first.id, new_title: `【游戏】${first.title}` }] }),
+                    },
+                  }],
+                },
+                finish_reason: 'tool_calls',
+              }],
+            };
+          }
+        } catch { /* fallthrough */ }
+      }
+    }
+    // 第三步：总结
+    return chatResponse('已完成：重命名 1 条书签，加上了【游戏】前缀。');
+  }
+
   // 单条收藏 enhance
   return chatResponse(
     JSON.stringify({ title: 'Mock 书签标题', summary: 'Mock 摘要', tags: ['mock'], folder: 'mock 文件夹' }),
@@ -321,6 +371,7 @@ try {
     settings.bindings.enhance = { providerId: 'mock-provider', model: 'mock-model' };
     settings.bindings.tldr = { providerId: 'mock-provider', model: 'mock-model' };
     settings.bindings.embedding = { providerId: 'mock-provider', model: 'mock-model' };
+    settings.bindings.agent = { providerId: 'mock-provider', model: 'mock-model' };
     await page.evaluate(send('saveSettings', settings));
     console.log('[smoke] mock 供应商已配置 ✓');
   });
@@ -507,6 +558,43 @@ try {
     await new Promise((r) => setTimeout(r, 11_000)); // 等挂起的 fetch 超时，批次收尾
     await page.evaluate(send('deleteJob', jobId3));
   });
+
+  // 8.6 对话 agent：自然语言批量重命名
+  {
+    const mp3 = await browser.newPage();
+    await mp3.goto(`chrome-extension://${extensionId}/manager.html`, { waitUntil: 'networkidle0' });
+    await new Promise((r) => setTimeout(r, 600));
+    await mp3.evaluate(() => {
+      const tab = [...document.querySelectorAll('button')].find((el) => el.textContent?.includes('助手'));
+      if (!tab) throw new Error('未找到助手标签');
+      tab.click();
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    await mp3.evaluate(() => {
+      const ta = document.querySelector('textarea');
+      if (!ta) throw new Error('未找到输入框');
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+      setter.call(ta, '把第一本书签重命名，加上【游戏】前缀');
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await mp3.evaluate(() => {
+      const btn = [...document.querySelectorAll('button')].find((el) => el.textContent?.includes('发送'));
+      if (!btn) throw new Error('未找到发送按钮，按钮列表: ' + [...document.querySelectorAll('button')].map((b) => b.textContent?.trim()).join('|').slice(0, 300));
+      btn.click();
+    });
+    let renamed = false;
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      renamed = await mp3.evaluate(`chrome.bookmarks.search('【游戏】').then(r => r.length > 0)`);
+      if (renamed) break;
+    }
+    const chatText = await mp3.evaluate(() => document.body.innerText);
+    const replied = chatText.includes('重命名 1 条');
+    console.log(`[smoke] 对话 agent: 重命名=${renamed ? '✓' : '✗'} 回复=${replied ? '✓' : '✗'}`);
+    if (!renamed) errors.push('agent 未执行重命名');
+    if (!replied) errors.push('agent 未给出总结回复');
+    await mp3.close();
+  }
 
   // 9. openManager
   await withPage(async (page) => {

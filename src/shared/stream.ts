@@ -6,23 +6,32 @@ import { browser } from 'wxt/browser';
  */
 export const STREAM_PORT = 'autobookmark-stream';
 
-export type StreamTask = 'tldr';
+export type StreamTask = 'tldr' | 'agent';
 
 export interface StreamRequest {
   task: StreamTask;
   payload: unknown;
 }
 
+export interface AgentTurnMessages {
+  role: string;
+  content: string;
+  tool_calls?: unknown[];
+  tool_call_id?: string;
+}
+
 export type StreamEvent =
   | { type: 'start' }
   | { type: 'delta'; text: string }
-  | { type: 'done' }
+  | { type: 'tool'; name: string; detail: string }
+  | { type: 'done'; newMessages?: AgentTurnMessages[] }
   | { type: 'error'; message: string };
 
 export interface StreamHandlers {
   onStart?: () => void;
   onDelta: (text: string) => void;
-  onDone?: () => void;
+  onTool?: (name: string, detail: string) => void;
+  onDone?: (newMessages?: AgentTurnMessages[]) => void;
   onError: (message: string) => void;
 }
 
@@ -39,7 +48,7 @@ export function startStream(task: StreamTask, payload: unknown, handlers: Stream
         handlers.onDelta(event.text);
         break;
       case 'done':
-        handlers.onDone?.();
+        handlers.onDone?.(event.newMessages);
         port.disconnect();
         break;
       case 'error':

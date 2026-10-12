@@ -44,7 +44,7 @@ export class NotConfiguredError extends Error {
   }
 }
 
-export function resolveBinding(settings: Settings, task: 'enhance' | 'tldr' | 'embedding'): {
+export function resolveBinding(settings: Settings, task: 'enhance' | 'tldr' | 'embedding' | 'agent'): {
   provider: ReturnType<typeof createClient>;
   model: string;
   providerId: string;

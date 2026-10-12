@@ -9,6 +9,7 @@ import FolderTree from './components/FolderTree.vue';
 import BookmarkList from './components/BookmarkList.vue';
 import OrganizePanel from './components/OrganizePanel.vue';
 import MetaEditDialog from '../../components/MetaEditDialog.vue';
+import AgentChat from './components/AgentChat.vue';
 import SettingsContent from '../../components/SettingsContent.vue';
 import { faviconUrl, formatTime } from '../../shared/ui';
 
@@ -31,8 +32,8 @@ const metaEditMeta = computed(() =>
 );
 /** 显示当前加载的扩展版本，用于确认刷新是否生效 */
 const extVersion = browser.runtime.getManifest().version;
-/** 页面级视图：书签浏览 / 设置 */
-const view = ref<'bookmarks' | 'settings'>('bookmarks');
+/** 页面级视图：书签浏览 / 设置 / AI 助手 */
+const view = ref<'bookmarks' | 'settings' | 'agent'>('bookmarks');
 const busyIds = ref(new Set<string>());
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -343,6 +344,13 @@ onMounted(async () => {
         >
           ⚙ 设置
         </button>
+        <button
+          class="px-3.5 py-1 rounded-lg text-xs transition-colors"
+          :class="view === 'agent' ? 'bg-white shadow-sm font-medium text-indigo-700' : 'text-slate-500 hover:text-slate-700'"
+          @click="view = 'agent'"
+        >
+          🤖 助手
+        </button>
       </nav>
 
       <template v-if="view === 'bookmarks'">
@@ -460,6 +468,9 @@ onMounted(async () => {
         </template>
       </main>
     </div>
+
+    <!-- 助手视图 -->
+    <AgentChat v-else-if="view === 'agent'" />
 
     <!-- 设置视图（内嵌页面） -->
     <div v-else class="flex-1 overflow-y-auto">

@@ -21,13 +21,14 @@ export const modelRefSchema = z.object({
 });
 export type ModelRef = z.infer<typeof modelRefSchema>;
 
-export const AI_TASKS = ['enhance', 'tldr', 'embedding'] as const;
+export const AI_TASKS = ['enhance', 'tldr', 'embedding', 'agent'] as const;
 export type AiTask = (typeof AI_TASKS)[number];
 
 export const AI_TASK_LABELS: Record<AiTask, string> = {
   enhance: '智能收藏（标题/摘要/标签）',
   tldr: '页面 TL;DR',
   embedding: '语义索引（向量搜索）',
+  agent: '对话助手（需支持 Function Calling）',
 };
 
 export const settingsSchema = z.object({
@@ -37,6 +38,7 @@ export const settingsSchema = z.object({
     enhance: modelRefSchema.nullable(),
     tldr: modelRefSchema.nullable(),
     embedding: modelRefSchema.nullable(),
+    agent: modelRefSchema.nullable(),
   }),
   preferences: z.object({
     /** 收藏根文件夹名（挂在"其他书签"下） */
@@ -58,7 +60,7 @@ export type Settings = z.infer<typeof settingsSchema>;
 export const DEFAULT_SETTINGS: Settings = {
   version: 1,
   providers: [],
-  bindings: { enhance: null, tldr: null, embedding: null },
+  bindings: { enhance: null, tldr: null, embedding: null, agent: null },
   preferences: {
     rootFolder: 'AI 收藏',
     autoFolder: true,
