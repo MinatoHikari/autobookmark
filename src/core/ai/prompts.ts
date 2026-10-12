@@ -124,11 +124,18 @@ export function buildBatchEnhanceMessages(
   ];
 }
 
-/** 聚类：一批书签 → 本批建议的类目名 */
-export function buildClusterMessages(items: BatchItem[]): ChatMessage[] {
+/** 聚类：一批书签 → 本批建议的类目名；maxDepth≥2 时类目为 "/" 分隔的多级路径 */
+export function buildClusterMessages(items: BatchItem[], maxDepth = 1): ChatMessage[] {
+  const depthLine =
+    maxDepth >= 2
+      ? [
+          `类目为最多 ${maxDepth} 级的路径，用 "/" 分隔（如 "开发/前端"、"AI/论文"），也可只给一级（如 "工具"）。`,
+          '每段：中文、2~6 字；同级类目互不重叠，子类目只挂在语义最贴近的父类目下。',
+        ]
+      : ['类目名要求：中文、2~6 字、通用且可扩展（如 "前端开发"、"AI"、"设计"、"产品"、"工具"、"阅读"、"购物"、"社交"）。'];
   const system = [
     '你是书签整理师。把下列书签按主题聚类，给出 3~8 个类目名。',
-    '类目名要求：中文、2~6 字、通用且可扩展（如 "前端开发"、"AI"、"设计"、"产品"、"工具"、"阅读"、"购物"、"社交"）。',
+    ...depthLine,
     '只输出 JSON：{"categories": ["...", "..."]}',
   ].join('\n');
   return [

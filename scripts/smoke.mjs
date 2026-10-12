@@ -43,6 +43,12 @@ function handleChat(body) {
     return chatResponse(JSON.stringify({ items }));
   }
   if (system.includes('按主题聚类')) {
+    // maxDepth≥2 的聚类 prompt 含「级的路径」→ 返回多级路径类目
+    if (system.includes('级的路径')) {
+      return chatResponse(
+        JSON.stringify({ categories: ['mock 大类/mock 子类A', 'mock 大类/mock 子类B', 'mock 分类二'] }),
+      );
+    }
     return chatResponse(JSON.stringify({ categories: ['mock 分类一', 'mock 分类二'] }));
   }
   if (system.includes('归入最合适的一个类目')) {
@@ -178,14 +184,44 @@ async function startMockServer(port) {
 
 // ---------- 浏览器 ----------
 const CHROME_CANDIDATES = [
+  // macOS
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   '/Applications/Chromium.app/Contents/MacOS/Chromium',
+  // Windows（Chrome 优先于 Edge：Edge 中文版根目录叫"收藏夹栏"，断言按 id 取标题后两者都能跑）
+  'C:/Program Files/Google/Chrome/Application/chrome.exe',
+  'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
+  'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
+  'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
 ];
+/** @puppeteer/browsers 的标准缓存（`npx @puppeteer/browsers install chrome@stable` 默认落点之一） */
+function findPuppeteerCacheChrome() {
+  const dir = `${homedir()}/.cache/puppeteer`;
+  if (!existsSync(dir)) return null;
+  const root = `${dir}/chrome`;
+  if (!existsSync(root)) return null;
+  for (const build of readdirSync(root).sort().reverse()) {
+    for (const candidate of [
+      `${root}/${build}/chrome-win64/chrome.exe`,
+      `${root}/${build}/chrome-win/chrome.exe`,
+      `${root}/${build}/chrome-linux64/chrome`,
+      `${root}/${build}/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`,
+    ]) {
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return null;
+}
 function findPlaywrightChrome() {
-  const dir = `${homedir()}/Library/Caches/ms-playwright`;
+  const isWin = process.platform === 'win32';
+  // Playwright 浏览器缓存：macOS 与 Windows 位置不同
+  const dir = isWin
+    ? `${homedir()}/AppData/Local/ms-playwright`
+    : `${homedir()}/Library/Caches/ms-playwright`;
   if (!existsSync(dir)) return null;
   for (const build of readdirSync(dir).filter((d) => d.startsWith('chromium-')).sort().reverse()) {
     for (const candidate of [
+      `${dir}/${build}/chrome-win64/chrome.exe`,
+      `${dir}/${build}/chrome-win/chrome.exe`,
       `${dir}/${build}/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`,
       `${dir}/${build}/chrome-mac/Chromium.app/Contents/MacOS/Chromium`,
       `${dir}/${build}/chrome-linux/chrome`,
@@ -195,8 +231,10 @@ function findPlaywrightChrome() {
   }
   return null;
 }
-const chromeExecutable = findPlaywrightChrome() ?? CHROME_CANDIDATES.find(existsSync);
+const chromeExecutable =
+  findPuppeteerCacheChrome() ?? findPlaywrightChrome() ?? CHROME_CANDIDATES.find(existsSync);
 if (!chromeExecutable) throw new Error('未找到可用的 Chrome/Chromium');
+if (chromeExecutable.includes('msedge')) console.log('[smoke] 使用 Edge（根目录将显示为"收藏夹栏"一类名称）');
 
 const browser = await puppeteer.launch({
   executablePath: chromeExecutable,
@@ -235,6 +273,16 @@ try {
     await page.close();
     return result;
   }
+
+  // 根目录实际标题（Chrome=书签栏/其他书签，Edge=收藏夹栏/其他收藏夹）：
+  // 造数与断言统一引用，按 id 定位而不是按标题猜
+  const rootTitles = await withPage(async (page) =>
+    page.evaluate(`(async () => {
+      const children = (await chrome.bookmarks.getTree())[0].children;
+      return { toolbar: children[0]?.title ?? '书签栏', other: children[1]?.title ?? '其他书签' };
+    })()`),
+  );
+  console.log(`[smoke] 根目录: ${rootTitles.toolbar} / ${rootTitles.other}`);
 
   // 2. 三页挂载
   for (const entry of ['popup.html', 'options.html', 'manager.html']) {
@@ -306,7 +354,7 @@ try {
   await pp0.goto(`chrome-extension://${extensionId}/popup.html`, { waitUntil: 'networkidle0' });
   await new Promise((r) => setTimeout(r, 800));
   const t0 = await pp0.evaluate(() => document.body.innerText);
-  const treeOk0 = t0.includes('书签栏') && t0.includes('零供应商测试书签');
+  const treeOk0 = t0.includes(rootTitles.toolbar) && t0.includes('零供应商测试书签');
   console.log(`[smoke] 零供应商树浏览: ${treeOk0 ? '✓' : '✗'}`);
   if (!treeOk0) errors.push('未配置供应商时树未渲染');
 
@@ -369,14 +417,14 @@ try {
     url: `http://127.0.0.1:${mockServer.port}/ok/plain-default`, title: '普通收藏·默认落点',
   }));
   const plain2 = await pp0.evaluate(send('savePlainBookmark', {
-    url: `http://127.0.0.1:${mockServer.port}/ok/plain-manual`, title: '普通收藏·手动路径', folderPath: '书签栏',
+    url: `http://127.0.0.1:${mockServer.port}/ok/plain-manual`, title: '普通收藏·手动路径', folderPath: rootTitles.toolbar,
   }));
   const p1node = await pp0.evaluate(`chrome.bookmarks.get(${JSON.stringify(plain1.bookmarkId)}).then(r => r[0])`);
   const p1parent = await pp0.evaluate(`chrome.bookmarks.get(${JSON.stringify(p1node.parentId)}).then(r => r[0])`);
   const p2parent = await pp0.evaluate(`chrome.bookmarks.get(${JSON.stringify(plain2.bookmarkId)}).then(r => r[0]).then(async n => (await chrome.bookmarks.get(n.parentId))[0])`);
   console.log(`[smoke] 普通收藏: 默认→${p1parent.title} 手动→${p2parent.title} 元数据=${plain1.summary !== undefined ? '✓' : '✗'}`);
   if (p1parent.title !== 'AI 收藏') errors.push(`普通收藏默认落点错误: ${p1parent.title}`);
-  if (p2parent.title !== '书签栏') errors.push(`手动路径落点错误: ${p2parent.title}`);
+  if (p2parent.title !== rootTitles.toolbar) errors.push(`手动路径落点错误: ${p2parent.title}`);
   await pp0.close();
 
 
@@ -433,7 +481,7 @@ try {
         url: 'https://example.com/strategy-test', title: '原标题', siteName: 'example.com',
         byline: '', excerpt: '', content: '', selection: '', extractedAt: Date.now(),
       },
-      draft: { title: '策略测试书签', summary: '验证落点', tags: ['策略'], folder: '其他书签/旧分类A/策略子目录' },
+      draft: { title: '策略测试书签', summary: '验证落点', tags: ['策略'], folder: `${rootTitles.other}/旧分类A/策略子目录` },
     }));
     const node = await page.evaluate(`chrome.bookmarks.get(${JSON.stringify(meta.bookmarkId)}).then(r => r[0])`);
     const parent = await page.evaluate(`chrome.bookmarks.get(${JSON.stringify(node.parentId)}).then(r => r[0])`);
@@ -466,7 +514,7 @@ try {
         url: 'https://example.com/alldirs-test', title: '原标题', siteName: 'example.com',
         byline: '', excerpt: '', content: '', selection: '', extractedAt: Date.now(),
       },
-      draft: { title: '全目录测试书签', summary: 'x', tags: ['t'], folder: '其他书签/长列表文件夹' },
+      draft: { title: '全目录测试书签', summary: 'x', tags: ['t'], folder: `${rootTitles.other}/长列表文件夹` },
     }));
     const node = await page.evaluate(`chrome.bookmarks.get(${JSON.stringify(meta.bookmarkId)}).then(r => r[0])`);
     const parent = await page.evaluate(`chrome.bookmarks.get(${JSON.stringify(node.parentId)}).then(r => r[0])`);
@@ -522,6 +570,36 @@ try {
     }
   });
 
+  // 6b. 自动分类 maxDepth=2：AI 产出「大类/子类」多级目录 + 撤销恢复
+  await withPage(async (page) => {
+    const before = await page.evaluate(send('getBookmarksTree'));
+    const jobId = await page.evaluate(
+      send('startJob', { kind: 'classify', params: { scope: 'other', maxCategories: 8, maxDepth: 2 } }),
+    );
+    const job = await waitForJob(page, jobId, (j) => j.status === 'done' || j.status === 'error', 60_000);
+    console.log(`[smoke] 层级分类 job: ${job.status}，报告: ${job.result?.report?.join('；') ?? job.error ?? '-'}`);
+    if (job.status !== 'done') errors.push(`层级分类失败: ${job.error}`);
+    if (!job.result?.report?.[0]?.includes('大类')) errors.push('层级分类报告未体现大类');
+
+    const layout = await page.evaluate(`(async () => {
+      const other = (await chrome.bookmarks.getTree())[0].children.find((c) => c.id === '2');
+      const parent = (other?.children ?? []).find((c) => !c.url && c.title === 'mock 大类');
+      if (!parent) return { ok: false, why: '其他书签下没有 mock 大类' };
+      const sub = (await chrome.bookmarks.getChildren(parent.id)).find((c) => !c.url && c.title === 'mock 子类A');
+      if (!sub) return { ok: false, why: 'mock 大类下没有 mock 子类A' };
+      const moved = (await chrome.bookmarks.getChildren(sub.id)).filter((c) => c.url).length;
+      return { ok: moved > 0, why: 'mock 子类A 内书签 ' + moved + ' 条', parentOk: parent.parentId === other.id };
+    })()`);
+    console.log(`[smoke] 层级目录落位: ${layout.ok && layout.parentOk ? '✓' : '✗'}（${layout.why}）`);
+    if (!layout.ok || !layout.parentOk) errors.push(`层级分类目录结构错误: ${layout.why}`);
+
+    const undone = await page.evaluate(send('undoJob', jobId));
+    const restored = await page.evaluate(send('getBookmarksTree'));
+    const okRestore = JSON.stringify(sortTree(restored.tree)) === JSON.stringify(sortTree(before.tree));
+    console.log(`[smoke] 层级分类撤销: ${undone && okRestore ? '✓' : '✗'}`);
+    if (!undone || !okRestore) errors.push('层级分类撤销后未恢复原状');
+  });
+
   // 6.5 备份：自动备份 + 手动备份 + HTML 导出 + 恢复
   await withPage(async (page) => {
     const backups = await page.evaluate(send('listBackups'));
@@ -552,6 +630,32 @@ try {
     console.log(`[smoke] 去重扫描: ${job.status}，${groups.length} 组待确认 ✓`);
     if (job.status !== 'awaiting-review' || !groups.length) errors.push(`去重扫描异常: ${job.status}`);
 
+    // 审查弹窗 UI：任务待确认时在整理中心自动弹出（去重组默认勾选断言见下方）
+    {
+      const mp = await browser.newPage();
+      await mp.goto(`chrome-extension://${extensionId}/manager.html`, { waitUntil: 'networkidle0' });
+      await new Promise((r) => setTimeout(r, 500));
+      await mp.evaluate(() => {
+        const btn = [...document.querySelectorAll('button')].find((el) => el.textContent?.includes('整理'));
+        if (!btn) throw new Error('未找到整理中心按钮');
+        btn.click();
+      });
+      await new Promise((r) => setTimeout(r, 2200)); // 等 1.5s 轮询自动弹窗
+      const modal = await mp.evaluate(`(() => {
+        const text = document.body.innerText;
+        const boxes = [...document.querySelectorAll('.fixed.inset-0.z-50 input[type=checkbox]')];
+        const checked = boxes.filter((b) => b.checked).length;
+        const hasModal = text.includes('删除重复书签');
+        [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === '取消')?.click();
+        return { hasModal, boxes: boxes.length, checked };
+      })()`);
+      const expectChecked = groups.reduce((n, g) => n + g.items.length - 1, 0);
+      const modalOk = modal.hasModal && modal.checked === expectChecked && modal.boxes > 0;
+      console.log(`[smoke] 去重审查弹窗: ${modalOk ? '✓' : '✗'}（勾选 ${modal.checked}/${modal.boxes}，默认应为 ${expectChecked}）`);
+      if (!modalOk) errors.push('去重审查弹窗默认勾选异常');
+      await mp.close();
+    }
+
     const keepByGroup = {};
     for (const g of groups) keepByGroup[g.id] = g.items[0].bookmarkId; // 保留每组第一条
     await page.evaluate(send('resolveJob', { jobId, keepByGroup }));
@@ -577,6 +681,68 @@ try {
     console.log(`[smoke] 死链清理: ${deadLeft ? '仍有残留 ✗' : '已清除 ✓'}`);
     if (deadLeft) errors.push('死链未清除');
   });
+
+  // 8.4 死链审查弹窗（全 UI 链路）：自动弹出 → 默认全选 → 确认删除 → 书签消失
+  {
+    const mp = await browser.newPage();
+    await mp.goto(`chrome-extension://${extensionId}/manager.html`, { waitUntil: 'networkidle0' });
+    await new Promise((r) => setTimeout(r, 500));
+    // 预置两条新死链（case 8 已清光 /dead/）
+    await mp.evaluate(`(async () => {
+      const other = (await chrome.bookmarks.getTree())[0].children.find((c) => c.id === '2');
+      const f = (other?.children ?? []).find((c) => !c.url && c.title === '旧分类A')
+        ?? (await chrome.bookmarks.create({ parentId: other.id, title: '旧分类A' }));
+      await chrome.bookmarks.create({ parentId: f.id, title: '弹窗死链一', url: 'http://127.0.0.1:${mockServer.port}/dead/modal1' });
+      await chrome.bookmarks.create({ parentId: f.id, title: '弹窗死链二', url: 'http://127.0.0.1:${mockServer.port}/dead/modal2' });
+    })()`);
+    await mp.evaluate(() => {
+      const btn = [...document.querySelectorAll('button')].find((el) => el.textContent?.includes('整理'));
+      if (!btn) throw new Error('未找到整理中心按钮');
+      btn.click();
+    });
+    const jobId = await mp.evaluate(send('startJob', { kind: 'deadlink', params: {} }));
+
+    // 轮询等任务进入待确认并自动弹窗
+    let modalState = null;
+    for (let i = 0; i < 40 && !modalState; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      modalState = await mp.evaluate(() => {
+        if (!document.body.innerText.includes('删除死链书签')) return null;
+        const boxes = [...document.querySelectorAll('.fixed.inset-0.z-50 input[type=checkbox]')];
+        return {
+          boxes: boxes.length,
+          checked: boxes.filter((b) => b.checked).length,
+          confirmDisabled:
+            [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('确认删除'))?.disabled ?? true,
+        };
+      });
+    }
+    const modalOk = !!modalState && modalState.boxes >= 2 && modalState.checked === modalState.boxes && !modalState.confirmDisabled;
+    console.log(`[smoke] 死链审查弹窗: ${modalOk ? '✓ 默认全选' : '✗'}（${JSON.stringify(modalState)}）`);
+    if (!modalOk) errors.push('死链审查弹窗默认全选异常');
+
+    await mp.evaluate(() => {
+      const btn = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('确认删除'));
+      if (!btn) throw new Error('未找到确认删除按钮');
+      btn.click();
+    });
+    let jobAfter = null;
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      const jobs = await mp.evaluate(send('getJobs', null));
+      jobAfter = jobs.find((x) => x.id === jobId);
+      if (jobAfter && jobAfter.status !== 'awaiting-review') break;
+      await new Promise((r) => setTimeout(r, 400));
+    }
+    const modalDeadGone = await mp.evaluate(`(async () => {
+      const s1 = await chrome.bookmarks.search({ title: '弹窗死链一' });
+      const s2 = await chrome.bookmarks.search({ title: '弹窗死链二' });
+      return s1.length === 0 && s2.length === 0;
+    })()`);
+    console.log(`[smoke] 死链弹窗确认删除: ${jobAfter?.status === 'done' && modalDeadGone ? '✓' : '✗'}（job=${jobAfter?.status}）`);
+    if (jobAfter?.status !== 'done' || !modalDeadGone) errors.push('死链弹窗确认删除未生效');
+    await mp.close();
+  }
 
   // 8.5 取消后新任务不被阻塞 + 删除任务记录
   await withPage(async (page) => {
@@ -1000,11 +1166,11 @@ try {
     await new Promise((r) => setTimeout(r, 800));
     const popupText = await pp.evaluate(() => document.body.innerText.slice(0, 300));
     console.log('[smoke] popup 页面文本:', JSON.stringify(popupText));
-    await pp.evaluate(() => {
-      const row = [...document.querySelectorAll('button')].find((el) => el.textContent?.includes('书签栏'));
+    await pp.evaluate((rootTitle) => {
+      const row = [...document.querySelectorAll('button')].find((el) => el.textContent?.includes(rootTitle));
       if (!row) throw new Error('popup 树中未找到文件夹行');
       row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 60, clientY: 60 }));
-    });
+    }, rootTitles.toolbar);
     await new Promise((r) => setTimeout(r, 300));
     const menuText = await pp.evaluate(() => document.body.innerText);
     const menuOk = menuText.includes('在管理页中查看') && (menuText.includes('展开') || menuText.includes('收起'));

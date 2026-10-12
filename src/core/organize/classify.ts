@@ -18,6 +18,8 @@ export interface ClassifyParams {
   scope: 'toolbar' | 'other' | 'all' | 'folder';
   /** scope='folder' 时必填：目标文件夹 id，类目仍建在"其他书签"下（与整理中心一致） */
   folderId?: string;
+  /** 类目层级上限：1=扁平类目（旧行为），≥2 时类目为 "/" 分隔的多级路径 */
+  maxDepth: number;
   maxCategories: number;
   progress: {
     phase: 'cluster' | 'assign' | 'execute' | 'sweep';
@@ -32,9 +34,10 @@ export interface ClassifyParams {
   rootId: string;
 }
 
-const clusterSchema = z.object({ categories: z.array(z.string().min(1).max(24)).min(1).max(16) });
+// 类目可能是多级路径（"开发/前端/Vue"），长度上限放宽
+const clusterSchema = z.object({ categories: z.array(z.string().min(1).max(64)).min(1).max(16) });
 const assignSchema = z.object({
-  assignments: z.array(z.object({ i: z.number().int(), category: z.string().min(1).max(24) })),
+  assignments: z.array(z.object({ i: z.number().int(), category: z.string().min(1).max(64) })),
 });
 
 /** 范围对应的根节点 id（书签栏 / 其他书签）；folder 模式与 all 一致落在其他书签下 */
@@ -94,6 +97,7 @@ export async function prepareClassify(job: OrganizeJob, settings: Settings): Pro
   const full: ClassifyParams = {
     scope,
     folderId: params.folderId,
+    maxDepth: Math.min(3, Math.max(1, Number(params.maxDepth) || 1)),
     maxCategories: params.maxCategories ?? 12,
     items,
     rootId: await resolveScopeRootId(scope),
@@ -115,6 +119,23 @@ export async function prepareClassify(job: OrganizeJob, settings: Settings): Pro
     1 /* sweep */;
   job.total = batches;
   job.done = 0;
+}
+
+/**
+ * 逐段确保 "a/b/c" 路径存在（缺失即创建）。每级新建都记 createdIds + undo：
+ * undoJob 逆序回放，天然先删子级再删父级，多级目录无需额外处理。
+ */
+async function ensureFolderPath(
+  rootId: string,
+  path: string,
+  createdIds: string[],
+  undoLog: UndoEntry[],
+): Promise<string> {
+  let parentId = rootId;
+  for (const seg of path.split('/').filter(Boolean)) {
+    parentId = await ensureFolder(parentId, seg, createdIds, undoLog);
+  }
+  return parentId;
 }
 
 async function ensureFolder(
@@ -140,11 +161,16 @@ export async function processClassifyBatch(settings: Settings, job: OrganizeJob)
   if (p.phase === 'cluster') {
     const slice = params.items.slice(p.cursor, p.cursor + CLUSTER_BATCH);
     if (!slice.length) {
-      // 归并类目：频次排序，截断到 maxCategories，其余并入「其他」
-      const freq = new Map<string, number>();
-      for (const c of p.categories) freq.set(c, (freq.get(c) ?? 0) + 1);
-      const sorted = [...freq.entries()].sort((a, b) => b[1] - a[1]).map(([c]) => c);
-      p.categories = sorted.slice(0, Math.max(3, params.maxCategories));
+      // 归并类目：按顶层（路径首段）聚合频次，截断到 maxCategories 个大类，
+      // 保留其下全部子路径；maxDepth=1 时顶层即类目本身，与旧行为一致
+      const pathFreq = new Map<string, number>();
+      for (const c of p.categories) {
+        const top = c.split('/')[0]!;
+        pathFreq.set(top, (pathFreq.get(top) ?? 0) + 1);
+      }
+      const topSorted = [...pathFreq.entries()].sort((a, b) => b[1] - a[1]).map(([t]) => t);
+      const keptTops = new Set(topSorted.slice(0, Math.max(3, params.maxCategories)));
+      p.categories = p.categories.filter((c) => keptTops.has(c.split('/')[0]!));
       p.phase = 'assign';
       p.cursor = 0;
       return;
@@ -155,12 +181,21 @@ export async function processClassifyBatch(settings: Settings, job: OrganizeJob)
         const data = await chatJson(
           settings,
           'enhance',
-          buildClusterMessages(sub.map((x, idx) => ({ i: idx, title: x.title, url: x.url }))),
+          buildClusterMessages(
+            sub.map((x, idx) => ({ i: idx, title: x.title, url: x.url })),
+            params.maxDepth,
+          ),
           (raw) => clusterSchema.parse(raw),
           { timeoutMs: BATCH_TIMEOUT_MS },
         );
         for (const c of data.categories) {
-          const name = c.trim();
+          // 规范路径：逐段 trim、去空段、深度封顶到 maxDepth
+          const name = c
+            .split('/')
+            .map((seg) => seg.trim())
+            .filter(Boolean)
+            .slice(0, params.maxDepth)
+            .join('/');
           if (name && name !== '未定') p.categories.push(name);
         }
       },
@@ -220,9 +255,10 @@ export async function processClassifyBatch(settings: Settings, job: OrganizeJob)
       slice.map((x) => p.assignments[x.id]).filter((c): c is string => !!c),
     );
     for (const category of categories) {
+      // 类目可能是 "大类/子类" 多级路径，逐级查找/创建
       folderIds.set(
         category,
-        await ensureFolder(params.rootId, category, p.createdFolderIds, job.undoLog),
+        await ensureFolderPath(params.rootId, category, p.createdFolderIds, job.undoLog),
       );
     }
     for (const item of slice) {
@@ -264,14 +300,18 @@ export async function processClassifyBatch(settings: Settings, job: OrganizeJob)
   }
   if (candidates.length) job.done++;
   if (candidates.length < MOVE_BATCH * 2) {
-    // 结束：生成报告
+    // 结束：生成报告（多级类目时大类数与实际创建的文件夹数不同，分开统计）
     const assigned = Object.values(p.assignments).filter((c) => c !== '未定').length;
     const undecided = params.items.length - assigned;
+    const topCount = new Set(p.categories.map((c) => c.split('/')[0])).size;
+    const folderLine = p.createdFolderIds.length
+      ? params.maxDepth >= 2
+        ? `已建 ${topCount} 个大类 / ${p.createdFolderIds.length} 个文件夹（${p.categories.slice(0, 6).join('、')}${p.categories.length > 6 ? '…' : ''}）`
+        : `已建 ${p.createdFolderIds.length} 个分类文件夹（${p.categories.slice(0, 8).join('、')}${p.categories.length > 8 ? '…' : ''}）`
+      : '没有生成新的分类文件夹';
     job.result = {
       report: [
-        p.createdFolderIds.length
-          ? `已建 ${p.createdFolderIds.length} 个分类文件夹（${p.categories.slice(0, 8).join('、')}${p.categories.length > 8 ? '…' : ''}）`
-          : '没有生成新的分类文件夹',
+        folderLine,
         `已移动 ${assigned} 条书签`,
         `未归类 ${undecided} 条保留原地`,
         `清理空文件夹 ${p.removedFolders} 个`,

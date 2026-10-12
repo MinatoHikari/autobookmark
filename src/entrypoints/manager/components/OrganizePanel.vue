@@ -14,6 +14,8 @@ const busy = ref(false);
 const errorMsg = ref('');
 const scope = ref<'all' | 'toolbar' | 'other'>('all');
 const maxCategories = ref(12);
+/** 类目层级上限：≥2 时 AI 产出 "大类/子类" 多级目录 */
+const maxDepth = ref(1);
 const fetchContent = ref(false);
 
 // ---- 自定义弹层（原生 confirm/alert 在无头/自动化环境下会永久阻塞页面）----
@@ -61,6 +63,11 @@ async function refresh() {
   } catch {
     /* SW 可能休眠，下轮再试 */
   }
+  // 任务进入待确认 → 自动弹出审查弹窗（用户关掉过的不打扰）
+  const pending = jobs.value.find(
+    (j) => j.status === 'awaiting-review' && (j.kind === 'dedupe' || j.kind === 'deadlink'),
+  );
+  if (pending && !reviewJobId.value && !dismissedReviewIds.has(pending.id)) openReview(pending);
 }
 
 async function removeBackup(b: BackupEntry) {
@@ -167,7 +174,11 @@ function startEnhance() {
 }
 
 function startClassify() {
-  void begin('classify', { scope: scope.value, maxCategories: maxCategories.value });
+  void begin('classify', {
+    scope: scope.value,
+    maxCategories: maxCategories.value,
+    maxDepth: maxDepth.value,
+  });
 }
 
 function startDedupe() {
@@ -209,58 +220,66 @@ async function action(job: OrganizeJob, act: 'pause' | 'resume' | 'cancel' | 'un
   }
 }
 
-// ---- review 状态 ----
-const keepByGroup = ref<Record<string, string>>({});
-/** 死链 review 中勾选 = 保留 */
-const deadKeep = ref<Set<string>>(new Set());
+// ---- 审查弹窗（去重/死链落地前的可勾选二次确认，勾选=待删除，默认全选）----
+const reviewJobId = ref<string | null>(null);
+const reviewChecked = ref<Set<string>>(new Set());
+/** 用户手动关掉过弹窗的任务不再自动弹出 */
+const dismissedReviewIds = new Set<string>();
 
-function reviewJob(kind: OrganizeJob['kind']): OrganizeJob | undefined {
-  return jobs.value.find((j) => j.kind === kind && j.status === 'awaiting-review');
+const reviewLive = computed(() => jobs.value.find((j) => j.id === reviewJobId.value) ?? null);
+const isDedupeReview = computed(() => reviewLive.value?.kind === 'dedupe');
+const reviewGroups = computed(() => reviewLive.value?.result?.groups ?? []);
+const reviewRemoveCount = computed(() => reviewChecked.value.size);
+/** 去重组被全部勾选 = 一条都不保留，禁止确认 */
+const invalidGroups = computed(() =>
+  isDedupeReview.value
+    ? reviewGroups.value.filter((g) => g.items.every((i) => reviewChecked.value.has(i.bookmarkId)))
+    : [],
+);
+
+function openReview(job: OrganizeJob) {
+  reviewJobId.value = job.id;
+  // 默认全选待删：死链=每条都删；去重=每组保留第一条，其余勾删
+  const checked = new Set<string>();
+  for (const g of job.result?.groups ?? []) {
+    if (job.kind === 'dedupe') for (const item of g.items.slice(1)) checked.add(item.bookmarkId);
+    else for (const item of g.items) checked.add(item.bookmarkId);
+  }
+  reviewChecked.value = checked;
 }
 
-function setKeep(groupId: string, bookmarkId: string) {
-  keepByGroup.value = { ...keepByGroup.value, [groupId]: bookmarkId };
+function closeReview() {
+  if (reviewJobId.value) dismissedReviewIds.add(reviewJobId.value);
+  reviewJobId.value = null;
 }
 
-function toggleDead(id: string) {
-  const next = new Set(deadKeep.value);
+function toggleReviewCheck(id: string) {
+  const next = new Set(reviewChecked.value);
   if (next.has(id)) next.delete(id);
   else next.add(id);
-  deadKeep.value = next;
+  reviewChecked.value = next;
 }
 
-function deadRemoveCount(job: OrganizeJob): number {
-  const all = (job.result?.groups ?? []).flatMap((g) => g.items.map((i) => i.bookmarkId));
-  return all.filter((id) => !deadKeep.value.has(id)).length;
-}
-
-function defaultKeep(job: OrganizeJob, groupId: string): string {
-  return keepByGroup.value[groupId] ?? job.result?.groups?.find((g) => g.id === groupId)?.items[0]?.bookmarkId ?? '';
-}
-
-async function applyDedupe(job: OrganizeJob) {
-  const groups = job.result?.groups ?? [];
-  const decision: Record<string, string> = {};
-  for (const g of groups) decision[g.id] = keepByGroup.value[g.id] ?? g.items[0]!.bookmarkId;
+async function confirmReview() {
+  const job = reviewLive.value;
+  if (!job) return;
   busy.value = true;
   try {
-    await sendMessage('resolveJob', { jobId: job.id, keepByGroup: decision });
+    if (job.kind === 'dedupe') {
+      const keepByGroup: Record<string, string> = {};
+      for (const g of job.result?.groups ?? []) {
+        const keep = g.items.find((i) => !reviewChecked.value.has(i.bookmarkId));
+        if (keep) keepByGroup[g.id] = keep.bookmarkId;
+      }
+      await sendMessage('resolveJob', { jobId: job.id, keepByGroup });
+    } else {
+      await sendMessage('resolveJob', { jobId: job.id, removeIds: [...reviewChecked.value] });
+    }
+    reviewJobId.value = null;
     await refresh();
     emit('changed');
-  } finally {
-    busy.value = false;
-  }
-}
-
-async function applyDeadlink(job: OrganizeJob, all: boolean) {
-  const groups = job.result?.groups ?? [];
-  const everyId = groups.flatMap((g) => g.items.map((i) => i.bookmarkId));
-  const removeIds = all ? everyId : everyId.filter((id) => !deadKeep.value.has(id));
-  busy.value = true;
-  try {
-    await sendMessage('resolveJob', { jobId: job.id, removeIds });
-    await refresh();
-    emit('changed');
+  } catch (e) {
+    errorMsg.value = (e as Error).message;
   } finally {
     busy.value = false;
   }
@@ -386,12 +405,21 @@ onUnmounted(() => clearInterval(timer));
           <div class="rounded-xl bg-white border border-slate-200 p-3.5 space-y-2">
             <p class="text-xs font-semibold">🗂 自动分类</p>
             <div class="flex gap-1.5">
-              <select v-model="scope" class="flex-1 px-2 py-1 rounded-lg border border-slate-200 text-[11px] bg-white">
+              <select v-model="scope" class="flex-1 min-w-0 px-2 py-1 rounded-lg border border-slate-200 text-[11px] bg-white">
                 <option value="all">全部书签</option>
                 <option value="toolbar">仅书签栏</option>
                 <option value="other">仅其他书签</option>
               </select>
-              <label class="flex items-center gap-1 text-[11px] text-slate-500">
+              <select
+                v-model.number="maxDepth"
+                class="px-1.5 py-1 rounded-lg border border-slate-200 text-[11px] bg-white"
+                title="类目层级：≥2 级时 AI 生成「大类/子类」多级目录"
+              >
+                <option :value="1">1 级</option>
+                <option :value="2">2 级</option>
+                <option :value="3">3 级</option>
+              </select>
+              <label class="flex items-center gap-1 text-[11px] text-slate-500" title="大类数量上限">
                 ≤{{ maxCategories }}类
                 <input type="range" min="6" max="20" v-model.number="maxCategories" class="w-12 accent-indigo-600" />
               </label>
@@ -506,71 +534,21 @@ onUnmounted(() => clearInterval(timer));
               </button>
             </div>
 
-            <!-- 去重 review -->
-            <div v-if="job.status === 'awaiting-review' && job.kind === 'dedupe'" class="space-y-2 border-t border-slate-100 pt-2">
-              <div v-for="group in job.result?.groups ?? []" :key="group.id" class="rounded-lg bg-slate-50 p-2.5 space-y-1.5">
-                <p class="text-[10px] text-slate-400">重复组（选择保留一项，其余删除）</p>
-                <label
-                  v-for="item in group.items"
-                  :key="item.bookmarkId"
-                  class="flex items-start gap-2 cursor-pointer"
-                >
-                  <input
-                    type="radio"
-                    name="group.id"
-                    class="mt-0.5 accent-indigo-600"
-                    :checked="defaultKeep(job, group.id) === item.bookmarkId"
-                    @change="setKeep(group.id, item.bookmarkId)"
-                  />
-                  <span class="min-w-0">
-                    <span class="block text-xs truncate">{{ item.title }}</span>
-                    <span class="block text-[10px] text-slate-400 truncate">{{ item.folderPath || '·' }} · {{ item.url }}</span>
-                  </span>
-                </label>
-              </div>
+            <!-- 待确认：弹窗审查入口（进入待确认状态时自动弹出） -->
+            <div
+              v-if="job.status === 'awaiting-review'"
+              class="border-t border-slate-100 pt-2 flex items-center gap-2"
+            >
+              <span class="text-[11px] text-amber-600">
+                发现 {{ (job.result?.groups ?? []).length }} 组待确认
+              </span>
+              <span class="flex-1"></span>
               <button
-                class="w-full py-1.5 rounded-lg bg-red-500 text-white text-xs font-medium hover:bg-red-600 disabled:opacity-40"
-                :disabled="busy"
-                @click="applyDedupe(job)"
+                class="px-2.5 py-1 rounded-lg bg-red-500 text-white text-[11px] font-medium hover:bg-red-600"
+                @click="openReview(job)"
               >
-                删除重复项（保留所选）
+                去审查
               </button>
-            </div>
-
-            <!-- 死链 review -->
-            <div v-if="job.status === 'awaiting-review' && job.kind === 'deadlink'" class="space-y-2 border-t border-slate-100 pt-2">
-              <div class="max-h-56 overflow-y-auto space-y-1.5">
-                <label
-                  v-for="group in job.result?.groups ?? []"
-                  :key="group.id"
-                  class="flex items-start gap-2 cursor-pointer"
-                >
-                  <input
-                    type="checkbox"
-                    class="mt-0.5 accent-indigo-600"
-                    :checked="!deadKeep.has(group.items[0]!.bookmarkId)"
-                    @change="toggleDead(group.items[0]!.bookmarkId)"
-                  />
-                  <span class="min-w-0">
-                    <span class="block text-xs truncate">{{ group.items[0]!.title }}</span>
-                    <span class="block text-[10px] text-red-400 truncate">{{ group.items[0]!.url }}</span>
-                  </span>
-                </label>
-              </div>
-              <div class="flex gap-2">
-                <button
-                  class="flex-1 py-1.5 rounded-lg border border-slate-200 text-[11px] text-slate-600 hover:bg-slate-50"
-                  @click="applyDeadlink(job, false)"
-                >
-                  删除未勾选（{{ deadRemoveCount(job) }}）
-                </button>
-                <button
-                  class="flex-1 py-1.5 rounded-lg bg-red-500 text-white text-xs font-medium hover:bg-red-600"
-                  @click="applyDeadlink(job, true)"
-                >
-                  全部删除
-                </button>
-              </div>
             </div>
 
             <!-- 撤销 -->
@@ -585,6 +563,91 @@ onUnmounted(() => clearInterval(timer));
         </div>
       </div>
     </aside>
+
+    <!-- 审查弹窗：去重/死链落地前的可勾选二次确认（勾选=待删除，默认全选） -->
+    <div
+      v-if="reviewLive"
+      class="fixed inset-0 z-50 grid place-items-center bg-slate-900/50 p-6"
+      @click.self="closeReview"
+    >
+      <div class="w-full max-w-md max-h-[80vh] rounded-xl bg-white shadow-xl flex flex-col overflow-hidden">
+        <div class="px-4 pt-3.5 pb-2.5 border-b border-slate-100">
+          <p class="text-sm font-medium">{{ isDedupeReview ? '删除重复书签' : '删除死链书签' }}</p>
+          <p class="mt-0.5 text-[11px] text-slate-400 leading-relaxed">
+            {{
+              isDedupeReview
+                ? '勾选 = 删除；每组默认保留第一条，取消勾选即保留，每组至少保留一条'
+                : '勾选 = 删除（默认全选），取消勾选的保留'
+            }}
+          </p>
+        </div>
+        <div class="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3">
+          <template v-if="isDedupeReview">
+            <div
+              v-for="group in reviewGroups"
+              :key="group.id"
+              class="rounded-lg border p-2.5 space-y-1.5"
+              :class="invalidGroups.some((g) => g.id === group.id) ? 'border-red-300 bg-red-50/60' : 'border-slate-200 bg-slate-50'"
+            >
+              <label
+                v-for="item in group.items"
+                :key="item.bookmarkId"
+                class="flex items-start gap-2 cursor-pointer"
+              >
+                <input
+                  type="checkbox"
+                  class="mt-0.5 accent-red-500"
+                  :checked="reviewChecked.has(item.bookmarkId)"
+                  @change="toggleReviewCheck(item.bookmarkId)"
+                />
+                <span class="min-w-0" :class="reviewChecked.has(item.bookmarkId) ? 'opacity-60' : ''">
+                  <span class="block text-xs truncate">{{ item.title }}</span>
+                  <span class="block text-[10px] text-slate-400 truncate">{{ item.folderPath || '·' }} · {{ item.url }}</span>
+                </span>
+              </label>
+            </div>
+          </template>
+          <template v-else>
+            <label
+              v-for="group in reviewGroups"
+              :key="group.id"
+              class="flex items-start gap-2 cursor-pointer"
+            >
+              <input
+                type="checkbox"
+                class="mt-0.5 accent-red-500"
+                :checked="reviewChecked.has(group.items[0]!.bookmarkId)"
+                @change="toggleReviewCheck(group.items[0]!.bookmarkId)"
+              />
+              <span class="min-w-0">
+                <span class="block text-xs truncate">{{ group.items[0]!.title }}</span>
+                <span class="block text-[10px] text-red-400 truncate">{{ group.items[0]!.url }}</span>
+                <span class="block text-[10px] text-slate-400 truncate">{{ group.items[0]!.folderPath }}</span>
+              </span>
+            </label>
+          </template>
+        </div>
+        <div class="px-4 py-3 border-t border-slate-100 flex items-center gap-2">
+          <p v-if="invalidGroups.length" class="flex-1 text-[11px] text-red-500">
+            有 {{ invalidGroups.length }} 组全部勾选，需至少保留一条
+          </p>
+          <span v-else class="flex-1 text-[11px] text-slate-400">将删除 {{ reviewRemoveCount }} 条</span>
+          <button
+            class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50"
+            @click="closeReview"
+          >
+            取消
+          </button>
+          <button
+            class="px-3 py-1.5 rounded-lg bg-red-500 text-white text-xs font-medium hover:bg-red-600 disabled:opacity-40"
+            :disabled="busy || !reviewRemoveCount || !!invalidGroups.length"
+            @click="confirmReview"
+          >
+            确认删除（{{ reviewRemoveCount }}）
+          </button>
+        </div>
+      </div>
+    </div>
 
     <!-- 确认弹层（替代原生 confirm） -->
     <div
