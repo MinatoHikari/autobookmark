@@ -272,6 +272,32 @@ try {
   console.log(`[smoke] 预置 ${seeded.ids.length} 条书签 ✓`);
   console.log(`[smoke] 预置 ${seeded.ids.length} 条书签 ✓`);
 
+  // 3.4 旧格式设置迁移：写入 v0.3.0 形状的设置 → 加载并保存不应报错，且新字段自动补齐
+  await withPage(async (page) => {
+    await page.evaluate(() =>
+      chrome.storage.local.set({
+        settings: {
+          version: 1,
+          providers: [],
+          bindings: { enhance: null, tldr: null, embedding: null },
+          preferences: {
+            rootFolder: 'AI 收藏', autoFolder: true, language: 'zh',
+            maxContentChars: 8000, contextMenuEnabled: true, notifications: true,
+          },
+        },
+      }),
+    );
+    const migrated = await page.evaluate(`(async () => {
+      const res = await chrome.runtime.sendMessage({ type: 'saveSettings', timestamp: Date.now(), data: await chrome.runtime.sendMessage({ type: 'getSettings', timestamp: Date.now() }).then(r => r.res ?? r) });
+      if (res && 'err' in res) throw new Error(String(res.err?.message ?? res.err));
+      return res?.res ?? res;
+    })()`);
+    const okMigrated =
+      migrated?.bindings && 'agent' in migrated.bindings && 'saveStrategy' in migrated.preferences;
+    console.log(`[smoke] 旧设置迁移: ${okMigrated ? '✓' : '✗'}`);
+    if (!okMigrated) errors.push('旧格式设置迁移失败（缺少新字段或保存报错）');
+  });
+
   // 3.5 未配置供应商：树浏览 / 右键编辑保存 / 删除 全部可用
   await withPage(async (page) => {
     await page.evaluate(`chrome.bookmarks.create({ parentId: '1', title: '零供应商测试书签', url: 'http://127.0.0.1:${mockServer.port}/ok/zeroprovider' })`);
@@ -607,6 +633,20 @@ try {
     const bindingRow = settingsText.includes('对话助手');
     console.log(`[smoke] 设置任务绑定含对话助手: ${bindingRow ? '✓' : '✗'}`);
     if (!bindingRow) errors.push('任务绑定缺少对话助手行');
+
+    // 保存设置回归：任务绑定页点保存 → 应出现"已保存"
+    mp3.on('console', (msg) => {
+      if (msg.type() === 'error') console.log('[设置页 console.error]', msg.text().slice(0, 200));
+    });
+    await mp3.evaluate(() => {
+      const btn = [...document.querySelectorAll('button')].find((el) => el.textContent?.trim() === '保存设置');
+      if (!btn) throw new Error('未找到保存设置按钮');
+      btn.click();
+    });
+    await new Promise((r) => setTimeout(r, 800));
+    const savedShown = await mp3.evaluate(() => document.body.innerText.includes('已保存'));
+    console.log(`[smoke] 设置保存: ${savedShown ? '✓' : '✗'}`);
+    if (!savedShown) errors.push('设置保存失败（未出现已保存提示）');
 
     // 切回助手：对话从 storage.local 恢复
     await mp3.evaluate(() => {

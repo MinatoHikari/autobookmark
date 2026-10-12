@@ -77,9 +77,19 @@ const STORAGE_KEY = 'settings';
 export async function getSettings(): Promise<Settings> {
   const raw = (await browser.storage.local.get(STORAGE_KEY))[STORAGE_KEY];
   if (!raw) return structuredClone(DEFAULT_SETTINGS);
-  const parsed = settingsSchema.safeParse(raw);
-  // 字段不完整时用默认值补齐，避免旧版本数据崩溃
-  return parsed.success ? parsed.data : { ...structuredClone(DEFAULT_SETTINGS), ...raw };
+  // 旧版本设置缺新增字段（如 bindings.agent / saveStrategy）：
+  // 必须逐段与默认值深合并，否则保存时会因缺少必填键而校验失败
+  const defaults = structuredClone(DEFAULT_SETTINGS);
+  const rawAny = raw as Partial<Settings>;
+  const merged: Settings = {
+    ...defaults,
+    ...rawAny,
+    bindings: { ...defaults.bindings, ...(rawAny.bindings ?? {}) },
+    preferences: { ...defaults.preferences, ...(rawAny.preferences ?? {}) },
+    providers: Array.isArray(rawAny.providers) ? rawAny.providers : defaults.providers,
+  };
+  const parsed = settingsSchema.safeParse(merged);
+  return parsed.success ? parsed.data : defaults;
 }
 
 export async function saveSettings(settings: Settings): Promise<void> {
