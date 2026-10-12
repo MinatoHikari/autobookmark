@@ -217,6 +217,52 @@ function openCtxMenu(payload: { node: TreeNodeDto; x: number; y: number }) {
   ctxMenu.value = { node: payload.node, x, y };
 }
 
+// ---- 右键新建书签（落点=该文件夹）----
+const createBookmarkState = ref<{ node: TreeNodeDto; title: string; url: string } | null>(null);
+const createBookmarkError = ref('');
+
+function nodeFolderPath(node: TreeNodeDto): string {
+  const walk = (nodes: TreeNodeDto[], parents: string[]): string | null => {
+    for (const n of nodes) {
+      const path = [...parents, n.title].join('/');
+      if (n.id === node.id) return path;
+      if (!n.url) {
+        const hit = walk(n.children, [...parents, n.title]);
+        if (hit) return hit;
+      }
+    }
+    return null;
+  };
+  return walk(tree.value, []) ?? '其他书签';
+}
+
+function openCreateBookmark(node: TreeNodeDto) {
+  ctxMenu.value = null;
+  createBookmarkError.value = '';
+  createBookmarkState.value = { node, title: '', url: '' };
+}
+
+async function confirmCreateBookmark() {
+  const form = createBookmarkState.value;
+  const title = form?.title.trim();
+  const url = form?.url.trim();
+  if (!form || !title) {
+    createBookmarkError.value = '标题不能为空';
+    return;
+  }
+  if (!url || !/^https?:\/\//i.test(url)) {
+    createBookmarkError.value = '链接必须以 http:// 或 https:// 开头';
+    return;
+  }
+  try {
+    await sendMessage('savePlainBookmark', { url, title, folderPath: nodeFolderPath(form.node) });
+    createBookmarkState.value = null;
+    await refreshTree();
+  } catch (e) {
+    createBookmarkError.value = (e as Error).message;
+  }
+}
+
 async function menuAction(act: 'open' | 'edit' | 'createIn' | 'delete' | 'enhance' | 'reclassify') {
   const node = ctxMenu.value?.node;
   ctxMenu.value = null;
@@ -530,6 +576,13 @@ onMounted(async () => {
           ＋ 新建子文件夹
         </button>
         <button
+          v-if="!ctxMenu.node.url"
+          class="w-full text-left px-3 py-1.5 hover:bg-indigo-50 hover:text-indigo-700"
+          @click="openCreateBookmark(ctxMenu.node)"
+        >
+          🔖 新建书签
+        </button>
+        <button
           class="w-full text-left px-3 py-1.5 text-red-500 hover:bg-red-50"
           @click="menuAction('delete')"
         >
@@ -544,6 +597,35 @@ onMounted(async () => {
       @close="metaEditNode = null"
       @saved="refreshTree()"
     />
+
+    <!-- 新建书签弹层 -->
+    <div
+      v-if="createBookmarkState"
+      class="fixed inset-0 z-50 grid place-items-center bg-slate-900/40 p-6"
+      @click.self="createBookmarkState = null"
+    >
+      <div class="w-full max-w-sm rounded-xl bg-white p-5 shadow-xl space-y-3">
+        <p class="text-sm font-medium">新建书签</p>
+        <p class="text-[11px] text-slate-400">位置：{{ nodeFolderPath(createBookmarkState.node) }}</p>
+        <p v-if="createBookmarkError" class="px-2.5 py-1.5 rounded-lg bg-red-50 text-red-600 text-xs">{{ createBookmarkError }}</p>
+        <input
+          v-model="createBookmarkState.title"
+          autofocus
+          placeholder="标题"
+          class="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:border-indigo-400"
+        />
+        <input
+          v-model="createBookmarkState.url"
+          placeholder="https://…"
+          class="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm font-mono focus:outline-none focus:border-indigo-400"
+          @keydown.enter="confirmCreateBookmark"
+        />
+        <div class="flex justify-end gap-2">
+          <button class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50" @click="createBookmarkState = null">取消</button>
+          <button class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700" @click="confirmCreateBookmark">创建</button>
+        </div>
+      </div>
+    </div>
 
     <OrganizePanel
       v-if="showOrganize"

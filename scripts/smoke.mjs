@@ -752,6 +752,42 @@ try {
     console.log(`[smoke] 移动后定位: 行可见=${result.found && result.inAsideView ? '✓' : '✗'}（滚动位置 ${result.scrollTop ?? '-'}px）`);
     if (!result.found) errors.push('移动后树中未找到被移动书签');
     else if (!result.inAsideView) errors.push('移动后未定位到目标行（仍在顶部或可视区外）');
+
+    // 右键新建书签（文件夹 → 🔖 新建书签 → 表单 → 创建）
+    await mp4.evaluate(() => {
+      const row = [...document.querySelectorAll('div[data-node-id]')].find((el) => el.textContent?.includes('长列表文件夹'));
+      if (!row) throw new Error('未找到长列表文件夹行');
+      row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 200, clientY: 150 }));
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    await mp4.evaluate(() => {
+      const btn = [...document.querySelectorAll('button')].find((el) => el.textContent?.includes('新建书签'));
+      if (!btn) throw new Error('菜单中未找到新建书签项');
+      btn.click();
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    await mp4.evaluate(() => {
+      const title = [...document.querySelectorAll('input')].find((el) => el.placeholder === '标题');
+      const url = [...document.querySelectorAll('input')].find((el) => el.placeholder === 'https://…');
+      if (!title || !url) throw new Error('未找到新建书签表单');
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      setter.call(title, '管理页新建书签');
+      title.dispatchEvent(new Event('input', { bubbles: true }));
+      setter.call(url, 'http://example.com/manager-new');
+      url.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await mp4.evaluate(() => {
+      [...document.querySelectorAll('button')].find((el) => el.textContent?.trim() === '创建')?.click();
+    });
+    await new Promise((r) => setTimeout(r, 600));
+    const bmCreated = await mp4.evaluate(`(async () => {
+      const [bm] = await chrome.bookmarks.search({ title: '管理页新建书签' });
+      if (!bm) return false;
+      const folder = (await chrome.bookmarks.get(bm.parentId))[0];
+      return folder.title === '长列表文件夹';
+    })()`);
+    console.log(`[smoke] 管理页新建书签: ${bmCreated ? '✓' : '✗'}`);
+    if (!bmCreated) errors.push('管理页新建书签落点错误或未创建');
     await mp4.close();
   }
 
