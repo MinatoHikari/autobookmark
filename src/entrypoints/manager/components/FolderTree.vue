@@ -62,6 +62,7 @@ function hintClass(node: TreeNodeDto): string {
         :data-ab-root="isRootLevel() ? '1' : null"
         @click="onRowClick(node)"
         @dblclick="node.url && emit('openBookmark', node)"
+        @auxclick.middle="node.url && emit('openBookmark', node)"
         @mousedown="beginRowDrag(node, $event, isRootLevel())"
         @dragstart.prevent
         @contextmenu.prevent.stop="emit('contextMenu', { node, x: $event.clientX, y: $event.clientY })"

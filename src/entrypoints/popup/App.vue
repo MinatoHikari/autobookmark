@@ -272,6 +272,14 @@ function toggleTreeNode(node: TreeNodeDto) {
 
 async function openBookmark(node: TreeNodeDto) {
   if (!node.url) return;
+  if (settings.value?.preferences.bookmarkOpenMode === 'currentTab') {
+    const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+    if (tab?.id) {
+      await browser.tabs.update(tab.id, { url: node.url });
+      window.close();
+      return;
+    }
+  }
   await browser.tabs.create({ url: node.url });
   window.close();
 }
@@ -307,8 +315,16 @@ function onTreeQueryInput() {
   }, 250);
 }
 
-function openResult(item: SearchResultItem) {
-  void browser.tabs.create({ url: item.url });
+async function openResult(item: SearchResultItem) {
+  if (settings.value?.preferences.bookmarkOpenMode === 'currentTab') {
+    const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+    if (tab?.id) {
+      await browser.tabs.update(tab.id, { url: item.url });
+      window.close();
+      return;
+    }
+  }
+  await browser.tabs.create({ url: item.url });
   window.close();
 }
 
@@ -669,6 +685,7 @@ onMounted(async () => {
           :key="item.bookmarkId"
           class="w-full flex items-start gap-2 rounded-lg px-2 py-2 text-left hover:bg-white transition-colors"
           @click="openResult(item)"
+          @auxclick.middle="openResult(item)"
         >
           <img :src="faviconUrl(item.url)" class="w-4 h-4 mt-0.5 rounded shrink-0" alt="" loading="lazy" />
           <span class="min-w-0">

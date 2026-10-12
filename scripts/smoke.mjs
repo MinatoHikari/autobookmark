@@ -987,7 +987,54 @@ try {
     })()`);
     console.log(`[smoke] popup 新建书签: ${bmCreated ? '✓' : '✗'}`);
     if (!bmCreated) errors.push('新建书签落点错误或未创建');
-    await pp.close();
+
+    // 打开方式：默认 newTab → 点击书签新开标签页
+    const p1 = await browser.newPage();
+    await p1.setViewport({ width: 660, height: 600 });
+    await p1.goto(`chrome-extension://${extensionId}/popup.html`, { waitUntil: 'networkidle0' });
+    await new Promise((r) => setTimeout(r, 800));
+    await p1.evaluate(() => {
+      const row = [...document.querySelectorAll('button')].find((el) => el.textContent?.includes('普通收藏·手动路径'));
+      row?.click();
+    });
+    await new Promise((r) => setTimeout(r, 800));
+    const newTabOpened = (await browser.pages()).some((pg) => pg.url().includes('/ok/plain-manual'));
+    console.log(`[smoke] 默认新标签页打开: ${newTabOpened ? '✓' : '✗'}`);
+    if (!newTabOpened) errors.push('默认点击未在新标签页打开');
+    try { await p1.close(); } catch { /* window.close 可能已自行关闭 */ }
+
+    // 切换为 currentTab（用独立探针页写设置）
+    const probe = await browser.newPage();
+    await probe.goto(`chrome-extension://${extensionId}/popup.html`, { waitUntil: 'networkidle0' });
+    await probe.evaluate(`(async () => {
+      const s = await chrome.runtime.sendMessage({ type: 'getSettings', timestamp: Date.now() }).then(r => r.res ?? r);
+      s.preferences.bookmarkOpenMode = 'currentTab';
+      await chrome.runtime.sendMessage({ type: 'saveSettings', timestamp: Date.now(), data: s });
+    })()`);
+    await probe.close();
+
+    // currentTab → 点击后 popup 页自身导航到目标
+    const p2 = await browser.newPage();
+    await p2.setViewport({ width: 660, height: 600 });
+    await p2.goto(`chrome-extension://${extensionId}/popup.html`, { waitUntil: 'networkidle0' });
+    await new Promise((r) => setTimeout(r, 800));
+    // 模拟用户正在看的页面：让哑标签处于前台，popup（p2）在后台
+    const dummy = await browser.newPage();
+    await dummy.goto('about:blank');
+    await dummy.bringToFront();
+    const tabsBefore = (await browser.pages()).length;
+    await p2.evaluate(() => {
+      const row = [...document.querySelectorAll('button')].find((el) => el.textContent?.includes('普通收藏·手动路径'));
+      row?.click();
+    });
+    await new Promise((r) => setTimeout(r, 800));
+    const navigated = dummy.url().includes('/ok/plain-manual');
+    const tabsAfter = (await browser.pages()).length;
+    console.log(`[smoke] 当前标签页打开: ${navigated ? '✓' : '✗'} 新增标签=${tabsAfter - tabsBefore}`);
+    if (!navigated) errors.push('currentTab 模式未在当前标签页打开');
+    if (tabsAfter > tabsBefore) errors.push('currentTab 模式不应新开标签');
+    try { await dummy.close(); } catch { /* 已导航 */ }
+    try { await p2.close(); } catch { /* 可能已被 close */ }
   });
 } finally {
   await browser.close();

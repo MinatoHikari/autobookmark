@@ -53,6 +53,8 @@ export const settingsSchema = z.object({
     notifications: z.boolean(),
     /** AI 收藏存放策略：aiFolder=存入「AI 收藏」目录；existing=在已有目录中寻找合适目录（可在其下新建） */
     saveStrategy: z.enum(['aiFolder', 'existing']),
+    /** popup 左键打开书签的方式 */
+    bookmarkOpenMode: z.enum(['newTab', 'currentTab']),
   }),
 });
 export type Settings = z.infer<typeof settingsSchema>;
@@ -69,6 +71,7 @@ export const DEFAULT_SETTINGS: Settings = {
     contextMenuEnabled: true,
     notifications: true,
     saveStrategy: 'aiFolder',
+    bookmarkOpenMode: 'newTab',
   },
 };
 

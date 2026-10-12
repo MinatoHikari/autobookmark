@@ -69,6 +69,7 @@ function hintClass(node: TreeNodeDto): string {
         :data-ab-node="node.id"
         :data-ab-type="'bookmark'"
         @click="onRowClick(node, 'open')"
+        @auxclick.middle="emit('open', node)"
         @mousedown="beginRowDrag(node, $event, false)"
         @dragstart.prevent
         @contextmenu.prevent.stop="emit('contextMenu', { node, x: $event.clientX, y: $event.clientY })"
