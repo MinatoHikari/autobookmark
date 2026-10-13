@@ -11,7 +11,8 @@ import OrganizePanel from './components/OrganizePanel.vue';
 import MetaEditDialog from '../../components/MetaEditDialog.vue';
 import AgentChat from './components/AgentChat.vue';
 import SettingsContent from '../../components/SettingsContent.vue';
-import { faviconUrl, formatTime, openInCurrentTab, openInWindow } from '../../shared/ui';
+import { formatTime, openInCurrentTab, openInWindow } from '../../shared/ui';
+import FaviconImg from '../../components/FaviconImg.vue';
 import type { Settings } from '../../core/storage/settings';
 
 const tree = ref<TreeNodeDto[]>([]);
@@ -533,7 +534,7 @@ onMounted(async () => {
               :key="item.bookmarkId"
               class="group flex items-start gap-2.5 rounded-xl bg-white border border-slate-200 p-3 hover:border-indigo-200"
             >
-              <img :src="faviconUrl(item.url)" class="w-4 h-4 mt-1 rounded" alt="" loading="lazy" />
+              <FaviconImg :url="item.url" class="w-4 h-4 mt-1 rounded" loading="lazy" />
               <div class="min-w-0 flex-1 cursor-pointer" @click="openUrl(item.url)">
                 <h3 class="text-sm font-medium leading-snug break-words group-hover:text-indigo-700">{{ item.title }}</h3>
                 <p class="mt-1 text-xs text-slate-600 leading-relaxed line-clamp-2">{{ item.summary }}</p>

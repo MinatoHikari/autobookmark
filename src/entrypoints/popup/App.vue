@@ -5,12 +5,13 @@ import { sendMessage } from '../../shared/messages';
 import { startStream } from '../../shared/stream';
 import type { BookmarkDraft, BookmarkMeta, PageContent } from '../../shared/types';
 import type { Settings } from '../../core/storage/settings';
-import { faviconUrl, formatTime, hostOf, tooltipIfTruncated, openInCurrentTab, openInWindow } from '../../shared/ui';
+import { formatTime, hostOf, tooltipIfTruncated, openInCurrentTab, openInWindow } from '../../shared/ui';
 import { resolveDropTarget, setNodeDropHandler, type TreeDropEvent } from '../../shared/dnd';
 import { findNode, flattenBookmarks } from '../../core/organize/scan';
 import type { MetaBrief, SearchResultItem, TreeNodeDto } from '../../shared/types';
 import MiniTree from './components/MiniTree.vue';
 import MetaEditDialog from '../../components/MetaEditDialog.vue';
+import FaviconImg from '../../components/FaviconImg.vue';
 
 type Phase =
   | 'loading'
@@ -720,7 +721,7 @@ onMounted(async () => {
           @click="openResult(item)"
           @auxclick.middle="openResult(item)"
         >
-          <img :src="faviconUrl(item.url)" class="w-4 h-4 mt-0.5 rounded shrink-0" alt="" loading="lazy" />
+          <FaviconImg :url="item.url" class="w-4 h-4 mt-0.5 rounded shrink-0" loading="lazy" />
           <span class="min-w-0">
             <span class="block text-[13px] truncate" @mouseenter="tooltipIfTruncated">{{ item.title }}</span>
             <span class="block text-[10px] text-slate-400 truncate">{{ item.folderPath || hostOf(item.url) }}</span>
@@ -784,7 +785,7 @@ onMounted(async () => {
       <div v-else-if="phase === 'bookmarked'" class="space-y-3">
         <div class="rounded-xl bg-white border border-slate-200 p-3">
           <div class="flex items-start gap-2.5">
-            <img :src="faviconUrl(currentUrl)" class="w-5 h-5 mt-0.5 rounded" alt="" />
+            <FaviconImg :url="currentUrl" class="w-5 h-5 mt-0.5 rounded" />
             <div class="min-w-0 flex-1">
               <p class="text-sm font-medium leading-snug break-words">
                 {{ existingMeta?.title || currentTitle }}
@@ -823,7 +824,7 @@ onMounted(async () => {
       <template v-else-if="phase === 'idle' || phase === 'enhancing'">
         <div class="rounded-xl bg-white border border-slate-200 p-3">
           <div class="flex items-start gap-2.5">
-            <img :src="faviconUrl(currentUrl)" class="w-6 h-6 mt-0.5 rounded" alt="" />
+            <FaviconImg :url="currentUrl" class="w-6 h-6 mt-0.5 rounded" />
             <div class="min-w-0 flex-1">
               <p class="text-sm font-medium leading-snug break-words">{{ currentTitle || hostOf(currentUrl) }}</p>
               <p class="text-xs text-slate-400 mt-0.5 truncate">{{ currentUrl }}</p>
@@ -1012,11 +1013,10 @@ onMounted(async () => {
         <!-- 节点预览头 -->
         <div class="px-3 pt-2.5 pb-2 border-b border-slate-100">
           <div class="flex items-start gap-2">
-            <img
+            <FaviconImg
               v-if="ctxMenu.node.url"
-              :src="faviconUrl(ctxMenu.node.url)"
+              :url="ctxMenu.node.url"
               class="w-4 h-4 mt-0.5 rounded shrink-0"
-              alt=""
             />
             <span v-else class="shrink-0 text-sm">📁</span>
             <div class="min-w-0">

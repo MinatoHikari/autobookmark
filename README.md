@@ -33,7 +33,17 @@ pnpm build      # 产物在 .output/chrome-mv3
 pnpm zip        # 打包商店上传用 zip
 ```
 
-手动加载：Chrome 打开 `chrome://extensions` → 开发者模式 → "加载已解压的扩展程序" → 选择 `.output/chrome-mv3`。
+### Firefox
+
+```bash
+pnpm build:firefox   # 产物在 .output/firefox-mv3（WXT MV3 事件页）
+pnpm zip:firefox     # 打包 AMO 上传用 zip
+pnpm lint:firefox    # web-ext lint 检查产物
+```
+
+要求 Firefox 128+（MV3 按需 host 权限）。两处与 Chromium 的差异已做兼容：正文解析直接在带 DOM 的 event page 进行（无 offscreen API）；站点图标直接取目标站 `/favicon.ico`（无 `/_favicon/` 服务）。手动加载：`about:debugging#/runtime/this-firefox` → "临时载入附加组件" → 选择 `.output/firefox-mv3` 任意文件。临时载入使用随机扩展 ID；AMO 正式签名安装后固定为 manifest 声明的 gecko id。
+
+Chrome 手动加载：打开 `chrome://extensions` → 开发者模式 → "加载已解压的扩展程序" → 选择 `.output/chrome-mv3`。
 
 ## 配置 AI 供应商
 
@@ -87,4 +97,9 @@ pnpm build && node scripts/smoke.mjs
 - [ ] 阅读行为触发收藏提示（停留 + 滚动深度，默认关闭）
 - [ ] 与书签库对话（RAG）
 - [ ] 每周 Digest、导出 Markdown/JSON
-- [ ] Firefox 构建（WXT 一键 `-b firefox`）
+- [x] Firefox 构建（WXT 一键 `-b firefox`）
+
+## 上架与隐私
+
+- 隐私政策：[`PRIVACY.md`](PRIVACY.md)
+- 商店提交材料（权限说明、数据披露、素材清单）：[`docs/store-listing.md`](docs/store-listing.md)

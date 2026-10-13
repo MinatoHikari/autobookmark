@@ -3,7 +3,8 @@ import { computed, ref } from 'vue';
 import type { MetaBrief, TreeNodeDto } from '../../../shared/types';
 import { sendMessage } from '../../../shared/messages';
 import { beginRowDrag, shouldSuppressClick } from '../../../shared/dnd';
-import { faviconUrl, formatTime } from '../../../shared/ui';
+import { formatTime } from '../../../shared/ui';
+import FaviconImg from '../../../components/FaviconImg.vue';
 import MetaEditDialog from '../../../components/MetaEditDialog.vue';
 
 const props = defineProps<{
@@ -125,7 +126,7 @@ async function enhanceOne(id: string) {
         :checked="checked.has(node.id)"
         @change="toggleCheck(node.id)"
       />
-      <img :src="faviconUrl(node.url ?? '')" class="w-4 h-4 mt-1 rounded" alt="" loading="lazy" />
+      <FaviconImg :url="node.url ?? ''" class="w-4 h-4 mt-1 rounded" loading="lazy" />
       <div class="min-w-0 flex-1 cursor-pointer" @click="openUrl(node)">
         <div class="flex items-center gap-1.5 flex-wrap">
           <h3 class="text-sm font-medium leading-snug break-words group-hover:text-indigo-700 transition-colors">

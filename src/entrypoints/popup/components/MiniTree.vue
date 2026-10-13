@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { MetaBrief, TreeNodeDto } from '../../../shared/types';
-import { faviconUrl, tooltipIfTruncated } from '../../../shared/ui';
+import { tooltipIfTruncated } from '../../../shared/ui';
+import FaviconImg from '../../../components/FaviconImg.vue';
 import { beginRowDrag, draggingId, dropHint, shouldSuppressClick } from '../../../shared/dnd';
 
 const props = defineProps<{
@@ -75,7 +76,7 @@ function hintClass(node: TreeNodeDto): string {
         @contextmenu.prevent.stop="emit('contextMenu', { node, x: $event.clientX, y: $event.clientY })"
       >
         <span class="w-3.5 shrink-0"></span>
-        <img :src="faviconUrl(node.url)" class="w-3.5 h-3.5 shrink-0 rounded-sm" alt="" loading="lazy" />
+        <FaviconImg :url="node.url" class="w-3.5 h-3.5 shrink-0 rounded-sm" loading="lazy" />
         <span class="truncate flex-1" @mouseenter="tooltipIfTruncated">{{ node.title || node.url }}</span>
         <span
           v-if="metaById[node.id]?.summary"

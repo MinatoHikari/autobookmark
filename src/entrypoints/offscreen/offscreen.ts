@@ -1,22 +1,9 @@
 import { browser } from 'wxt/browser';
-import { Readability } from '@mozilla/readability';
-import TurndownService from 'turndown';
-
-function extractMarkdown(html: string): string {
-  const doc = new DOMParser().parseFromString(html, 'text/html');
-  const turndown = new TurndownService({
-    headingStyle: 'atx',
-    codeBlockStyle: 'fenced',
-    bulletListMarker: '-',
-  });
-  turndown.remove(['script', 'style', 'noscript', 'iframe']);
-  const article = new Readability(doc, { charThreshold: 80 }).parse();
-  return article?.content ? turndown.turndown(article.content).trim() : '';
-}
+import { extractMarkdown } from '../../core/organize/parse';
 
 /**
  * offscreen document：接收 SW 转发的 HTML 字符串，
- * DOMParser + Readability + Turndown 解析出 Markdown 正文。
+ * 解析逻辑在 core/organize/parse.ts（Firefox 构建不含本入口，直接在 background 解析）。
  * （MV3 service worker 没有 DOM，这是 Chromium 官方推荐的解析路径）
  */
 const onMessage = browser.runtime.onMessage as unknown as {

@@ -1,6 +1,11 @@
 import { browser } from 'wxt/browser';
+import { extractMarkdown } from './parse';
 
 const OFFSCREEN_URL = '/offscreen.html';
+
+/** Chromium 的 SW 无 DOM，正文解析放进 offscreen document；Firefox 无此 API，
+ * 但 MV3 background 是带 DOM 的 event page，可直接在本地解析 */
+const supportsOffscreen = typeof browser.offscreen !== 'undefined';
 
 /** SW 无 DOM，正文解析放进 offscreen document（DOMParser + Readability） */
 async function ensureOffscreen(): Promise<void> {
@@ -10,6 +15,17 @@ async function ensureOffscreen(): Promise<void> {
     url: OFFSCREEN_URL,
     reasons: ['DOM_PARSER' as never],
     justification: '提取书签页面正文用于 AI 整理',
+  });
+}
+
+async function parseHtmlToMarkdown(html: string): Promise<string> {
+  if (!supportsOffscreen) return extractMarkdown(html);
+  await ensureOffscreen();
+  return new Promise<string>((resolve) => {
+    void browser.runtime
+      .sendMessage({ type: 'ab-offscreen-extract', html })
+      .then((response: unknown) => resolve(((response as { markdown?: string })?.markdown ?? '')))
+      .catch(() => resolve(''));
   });
 }
 
@@ -26,14 +42,7 @@ export async function fetchPageMarkdown(url: string): Promise<string> {
     let html = await res.text();
     if (html.length > 3_000_000) html = html.slice(0, 3_000_000);
 
-    await ensureOffscreen();
-    const markdown = await new Promise<string>((resolve) => {
-      void browser.runtime
-        .sendMessage({ type: 'ab-offscreen-extract', html })
-        .then((response: unknown) => resolve(((response as { markdown?: string })?.markdown ?? '')))
-        .catch(() => resolve(''));
-    });
-    return markdown;
+    return await parseHtmlToMarkdown(html);
   } catch {
     return '';
   }

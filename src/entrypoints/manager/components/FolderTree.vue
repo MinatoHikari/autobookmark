@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { TreeNodeDto } from '../../../shared/types';
 import { countBookmarks } from '../../../core/organize/scan';
-import { faviconUrl } from '../../../shared/ui';
+import FaviconImg from '../../../components/FaviconImg.vue';
 import { beginRowDrag, draggingId, dropHint, shouldSuppressClick } from '../../../shared/dnd';
 
 const props = defineProps<{
@@ -75,11 +75,10 @@ function hintClass(node: TreeNodeDto): string {
           {{ expanded.has(node.id) ? '▼' : '▶' }}
         </button>
         <span v-else class="w-4 shrink-0"></span>
-        <img
+        <FaviconImg
           v-if="node.url"
-          :src="faviconUrl(node.url)"
+          :url="node.url"
           class="w-4 h-4 shrink-0 rounded-sm"
-          alt=""
           loading="lazy"
         />
         <span v-else class="shrink-0">📁</span>

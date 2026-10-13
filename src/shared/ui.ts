@@ -3,8 +3,20 @@ import { browser } from 'wxt/browser';
 /** PublicPath 只包含 WXT 已知的输出文件，_favicon 是 Chrome 运行时内置路径 */
 const FAVICON_BASE = '/_favicon/' as unknown as Parameters<typeof browser.runtime.getURL>[0];
 
-/** Chrome 内置 favicon 服务（需 manifest 里声明 "favicon" 权限） */
+/**
+ * 书签站点图标地址。
+ * Chromium 用内置 favicon 服务（需 manifest 声明 "favicon" 权限）；
+ * Firefox 没有该服务，直接取站点根路径的 /favicon.ico（不经过第三方，无隐私外泄）。
+ * 加载失败由 FaviconImg 组件隐藏兜底。
+ */
 export function faviconUrl(pageUrl: string, size = 32): string {
+  if (import.meta.env.FIREFOX) {
+    try {
+      return `${new URL(pageUrl).origin}/favicon.ico`;
+    } catch {
+      return '';
+    }
+  }
   return `${browser.runtime.getURL(FAVICON_BASE)}?pageUrl=${encodeURIComponent(pageUrl)}&size=${size}`;
 }
 
