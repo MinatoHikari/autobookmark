@@ -91,15 +91,26 @@ pnpm build && node scripts/smoke.mjs
 
 内置本地 mock OpenAI 兼容服务器（无需真实 Key），用 Playwright 缓存的 Chrome for Testing 加载构建产物，覆盖：四个 UI 挂载、消息路由、`saveBookmark` 全链路、批量增强、自动分类 + **撤销恢复**、去重（精确+语义+AI 确认）、死链检测清理。
 
-## Roadmap
-
-- [ ] 相关书签召回浮层（阅读时提示库中相似收藏）
-- [ ] 阅读行为触发收藏提示（停留 + 滚动深度，默认关闭）
-- [ ] 与书签库对话（RAG）
-- [ ] 每周 Digest、导出 Markdown/JSON
-- [x] Firefox 构建（WXT 一键 `-b firefox`）
-
 ## 上架与隐私
 
 - 隐私政策：[`PRIVACY.md`](PRIVACY.md)
 - 商店提交材料（权限说明、数据披露、素材清单）：[`docs/store-listing.md`](docs/store-listing.md)
+
+## 许可证
+
+本项目基于 [GPL-3.0](https://www.gnu.org/licenses/gpl-3.0.html)（GNU General Public License v3.0）发布。
+
+Copyright (C) 2026 MinatoHikari
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
