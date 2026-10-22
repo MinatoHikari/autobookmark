@@ -37,12 +37,13 @@ import { browser } from 'wxt/browser';
 import { startStream } from '../../../shared/stream';
 import type { ChatMessage } from '../../../core/providers/client';
 import { sendMessage } from '../../../shared/messages';
+import { useI18n } from '../../../shared/i18n';
 import {
-  AI_TASK_LABELS,
   type ProviderConfig,
   type Settings,
 } from '../../../core/storage/settings';
 
+const t = useI18n();
 const STORE_KEY = 'agentConversations';
 const ACTIVE_KEY = 'agentActiveId';
 
@@ -91,7 +92,7 @@ async function onAgentModelChange(model: string) {
 const active = computed(() => conversations.value.find((c) => c.id === activeId.value) ?? null);
 
 function newConversation(): Conversation {
-  return { id: crypto.randomUUID(), title: '新对话', createdAt: Date.now(), items: [], history: [] };
+  return { id: crypto.randomUUID(), title: t('agent.newConversation'), createdAt: Date.now(), items: [], history: [] };
 }
 
 function switchTo(id: string) {
@@ -147,7 +148,7 @@ async function send() {
   input.value = '';
   running.value = true;
 
-  if (convo.title === '新对话') convo.title = text.slice(0, 24);
+  if (convo.title === t('agent.newConversation')) convo.title = text.slice(0, 24);
   convo.items.push({ role: 'user', text });
   const userMsg: ChatMessage = { role: 'user', content: text };
   const runHistory = [...convo.history, userMsg];
@@ -181,7 +182,7 @@ async function send() {
         const newMessages = (raw ?? []) as unknown as ChatMessage[];
         const finals = newMessages.filter((m) => m.role === 'assistant');
         const finalText = finals.map((m) => m.content).filter(Boolean).join('\n\n');
-        convo.items[assistantIdx]!.text = finalText || convo.items[assistantIdx]!.text || '（无回复）';
+        convo.items[assistantIdx]!.text = finalText || convo.items[assistantIdx]!.text || t('agent.noReply');
         convo.history = [...runHistory, ...newMessages];
         running.value = false;
         clearInterval(elapsedTimer);
@@ -204,7 +205,7 @@ async function clearActiveChat() {
   if (!convo || running.value) return;
   convo.items = [];
   convo.history = [];
-  convo.title = '新对话';
+  convo.title = t('agent.newConversation');
   await persistAll();
 }
 
@@ -244,7 +245,7 @@ watch(
         :disabled="running"
         @click="createConversation"
       >
-        ＋ 新对话
+        ＋ {{ t('agent.newConversation') }}
       </button>
       <div class="flex-1 overflow-y-auto px-2 pb-2 space-y-1">
         <div
@@ -257,7 +258,7 @@ watch(
           <span class="truncate flex-1">{{ c.title }}</span>
           <button
             class="shrink-0 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100"
-            title="删除此对话"
+            :title="t('agent.tipDeleteConversation')"
             @click.stop="deleteConversation(c.id)"
           >
             ✕
@@ -270,7 +271,7 @@ watch(
     <div class="flex-1 min-w-0 flex flex-col">
       <!-- 顶部：模型选择 -->
       <div class="flex items-center gap-2 px-4 py-2 border-b border-slate-200 bg-white shrink-0">
-        <span class="text-xs text-slate-400">{{ AI_TASK_LABELS.agent }}</span>
+        <span class="text-xs text-slate-400">{{ t('settings.taskAgent') }}</span>
         <span class="flex-1"></span>
         <template v-if="agentBinding">
           <select
@@ -296,15 +297,15 @@ watch(
             class="px-2.5 py-1 rounded-lg bg-amber-50 border border-amber-200 text-[11px] text-amber-700"
             @click="onAgentProviderChange(providers[0]!.id)"
           >
-            选择模型
+            {{ t('agent.pickModel') }}
           </button>
         </template>
-        <span v-else class="text-[11px] text-amber-600">先在设置中添加供应商</span>
+        <span v-else class="text-[11px] text-amber-600">{{ t('agent.noProviderHint') }}</span>
         <button
           class="px-2.5 py-1 rounded-lg border border-slate-200 text-[11px] text-slate-500 hover:bg-slate-50"
           @click="clearActiveChat"
         >
-          清空对话
+          {{ t('agent.clearChat') }}
         </button>
       </div>
 
@@ -315,13 +316,13 @@ watch(
         <div v-if="!active?.items.length" class="h-full grid place-items-center text-center">
           <div>
             <div class="text-3xl mb-3">🤖</div>
-            <p class="text-sm text-slate-500 mb-3">用一句话管理整个书签库</p>
+            <p class="text-sm text-slate-500 mb-3">{{ t('agent.emptyHint') }}</p>
             <div class="space-y-1.5">
               <button
                 v-for="q in [
-                  '帮我看看书签库里有哪些目录',
-                  '把书签栏里的书签按主题重命名，加上统一的格式',
-                  '找出重复收藏的书签',
+                  t('agent.suggest1'),
+                  t('agent.suggest2'),
+                  t('agent.suggest3'),
                 ]"
                 :key="q"
                 class="block mx-auto px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-xs text-slate-600 hover:border-indigo-300 hover:text-indigo-700"
@@ -358,7 +359,7 @@ watch(
                 class="flex items-center gap-2 text-xs text-slate-400"
               >
                 <span class="typing-dots"><span>●</span><span>●</span><span>●</span></span>
-                <span>思考中… {{ elapsed }}s（可切到其他标签页，执行不会中断）</span>
+                <span>{{ t('agent.thinking', { n: elapsed }) }}</span>
               </div>
               <template v-else>{{ item.text }}<span
                   v-if="running && i === (active?.items.length ?? 0) - 1"
@@ -376,7 +377,7 @@ watch(
           <textarea
             v-model="input"
             rows="2"
-            placeholder="例如：把「书签栏」里的书签按用途分类整理；把 osu 目录下的书签标题都加上【游戏】前缀…"
+            :placeholder="t('agent.inputPlaceholder')"
             class="flex-1 resize-none px-3 py-2 rounded-xl border border-slate-200 text-sm leading-relaxed focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
             @keydown.enter.exact.prevent="send"
           ></textarea>
@@ -385,7 +386,7 @@ watch(
             :disabled="running || !input.trim()"
             @click="send"
           >
-            {{ running ? '执行中…' : '发送' }}
+            {{ running ? t('agent.running') : t('agent.send') }}
           </button>
         </div>
       </div>

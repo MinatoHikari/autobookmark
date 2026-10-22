@@ -1,4 +1,5 @@
 import { browser } from 'wxt/browser';
+import { rt } from '../../shared/i18n';
 import type { BackupEntry, TreeNodeDto } from '../../shared/types';
 import { getTreeDtos } from './scan';
 import { getAllMeta, getBackup, pruneBackups, putBackup, putMeta, deleteMeta } from '../storage/db';
@@ -47,7 +48,7 @@ export async function restoreSnapshot(id: string): Promise<boolean> {
   if (!entry) return false;
 
   // 恢复前先把现状再存一份，防误操作
-  await createSnapshot('恢复前自动备份');
+  await createSnapshot(rt('organize.snapshotBeforeRestore'));
 
   const [realRoot] = await browser.bookmarks.getTree();
   const permanent = realRoot?.children ?? [];

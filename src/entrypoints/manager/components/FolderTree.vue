@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import type { TreeNodeDto } from '../../../shared/types';
 import { countBookmarks } from '../../../core/organize/scan';
+import { useI18n } from '../../../shared/i18n';
 import FaviconImg from '../../../components/FaviconImg.vue';
 import { beginRowDrag, draggingId, dropHint, shouldSuppressClick } from '../../../shared/dnd';
+
+const t = useI18n();
 
 const props = defineProps<{
   nodes: TreeNodeDto[];
@@ -13,8 +16,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   select: [node: TreeNodeDto];
-  /** 书签叶节点双击：新标签页打开 */
-  openBookmark: [node: TreeNodeDto];
+  /** 书签叶节点双击：新标签页打开（附带事件以识别 Ctrl/Cmd 修饰键） */
+  openBookmark: [node: TreeNodeDto, e?: MouseEvent];
   /** 右键菜单：节点 + 鼠标位置 */
   contextMenu: [payload: { node: TreeNodeDto; x: number; y: number }];
   toggle: [node: TreeNodeDto];
@@ -56,13 +59,13 @@ function hintClass(node: TreeNodeDto): string {
           hintClass(node),
         ]"
         :style="{ paddingLeft: `${(depth ?? 0) * 14 + 6}px` }"
-        :title="node.url ? '双击在新标签页打开' : ''"
+        :title="node.url ? t('folderTree.dblclickOpen') : ''"
         :data-ab-node="node.id"
         :data-ab-type="node.url ? 'bookmark' : 'folder'"
         :data-ab-root="isRootLevel() ? '1' : null"
         @click="onRowClick(node)"
-        @dblclick="node.url && emit('openBookmark', node)"
-        @auxclick.middle="node.url && emit('openBookmark', node)"
+        @dblclick="node.url && emit('openBookmark', node, $event)"
+        @auxclick.middle="node.url && emit('openBookmark', node, $event)"
         @mousedown="beginRowDrag(node, $event, isRootLevel())"
         @dragstart.prevent
         @contextmenu.prevent.stop="emit('contextMenu', { node, x: $event.clientX, y: $event.clientY })"
@@ -92,21 +95,21 @@ function hintClass(node: TreeNodeDto): string {
         <span v-if="!node.url" class="shrink-0 hidden group-hover:flex gap-0.5">
           <button
             class="w-5 h-5 grid place-items-center rounded text-slate-400 hover:bg-white hover:text-indigo-600"
-            title="新建子文件夹"
+            :title="t('common.newSubfolder')"
             @click.stop="emit('createIn', node)"
           >
             ＋
           </button>
           <button
             class="w-5 h-5 grid place-items-center rounded text-slate-400 hover:bg-white hover:text-indigo-600"
-            title="重命名"
+            :title="t('common.rename')"
             @click.stop="emit('rename', node)"
           >
             ✎
           </button>
           <button
             class="w-5 h-5 grid place-items-center rounded text-slate-400 hover:bg-white hover:text-red-500"
-            title="删除"
+            :title="t('common.delete')"
             @click.stop="emit('remove', node)"
           >
             🗑
@@ -120,7 +123,7 @@ function hintClass(node: TreeNodeDto): string {
         :expanded="expanded"
         :depth="(depth ?? 0) + 1"
         @select="emit('select', $event)"
-        @open-bookmark="emit('openBookmark', $event)"
+        @open-bookmark="(node, e) => emit('openBookmark', node, e)"
         @context-menu="emit('contextMenu', $event)"
         @toggle="emit('toggle', $event)"
         @create-in="emit('createIn', $event)"

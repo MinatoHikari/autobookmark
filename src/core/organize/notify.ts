@@ -1,12 +1,13 @@
 import { browser } from 'wxt/browser';
 import type { OrganizeJob } from '../../shared/types';
 import { getSettings } from '../storage/settings';
+import { rt, type I18nKey } from '../../shared/i18n';
 
-const KIND_LABELS: Record<OrganizeJob['kind'], string> = {
-  enhance: '补全元数据',
-  classify: '自动分类',
-  dedupe: '去重',
-  deadlink: '死链检测',
+const KIND_KEYS: Record<OrganizeJob['kind'], I18nKey> = {
+  enhance: 'notify.kindEnhance',
+  classify: 'notify.kindClassify',
+  dedupe: 'notify.kindDedupe',
+  deadlink: 'notify.kindDeadlink',
 };
 
 const TERMINAL_NOTIFY: OrganizeJob['status'][] = ['done', 'error', 'awaiting-review'];
@@ -30,18 +31,18 @@ export async function notifyJobTerminal(job: OrganizeJob): Promise<void> {
   try {
     const settings = await getSettings();
     if (!settings.preferences.notifications) return;
-    const kind = KIND_LABELS[job.kind] ?? job.kind;
+    const kind = rt(KIND_KEYS[job.kind]);
 
     if (job.status === 'done') {
-      await show(`整理完成 · ${kind}`, job.result?.report?.slice(0, 2).join('\n') ?? '任务已完成');
+      await show(rt('notify.done', { kind }), job.result?.report?.slice(0, 2).join('\n') ?? rt('notify.doneFallback'));
     } else if (job.status === 'awaiting-review') {
       const groups = job.result?.groups?.length ?? 0;
       await show(
-        `待确认 · ${kind}`,
-        groups ? `发现 ${groups} 组待处理项，请在整理中心确认` : '请在整理中心确认结果',
+        rt('notify.awaiting', { kind }),
+        groups ? rt('notify.awaitingGroups', { n: groups }) : rt('notify.awaitingPlain'),
       );
     } else if (job.status === 'error') {
-      await show(`整理失败 · ${kind}`, (job.error ?? '可点击「继续」从进度处重试').slice(0, 200));
+      await show(rt('notify.failed', { kind }), (job.error ?? rt('notify.failedFallback')).slice(0, 200));
     }
   } catch (e) {
     console.warn('[autobookmark] notification failed:', e);

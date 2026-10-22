@@ -1,4 +1,5 @@
 import { browser } from 'wxt/browser';
+import { rt } from '../../shared/i18n';
 import type { OrganizeJob, ReviewGroup } from '../../shared/types';
 import { flattenBookmarks, getTreeDtos } from './scan';
 
@@ -81,7 +82,7 @@ async function finalizeDeadlink(job: OrganizeJob): Promise<void> {
         { bookmarkId: b.id, title: b.title, url: b.url, folderPath: b.folderPath },
       ],
     })),
-    report: [`检测 ${params.ids.length} 条，发现 ${deadItems.length} 条死链`],
+    report: [rt('organize.reportDeadlink', { n: params.ids.length, m: deadItems.length })],
   };
   job.status = deadItems.length ? 'awaiting-review' : 'done';
 }

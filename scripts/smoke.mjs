@@ -8,10 +8,11 @@
  */
 import puppeteer from 'puppeteer-core';
 import { createServer } from 'node:http';
-import { realpathSync, existsSync, readdirSync } from 'node:fs';
+import { realpathSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
+import { inflateRawSync } from 'node:zlib';
 
 const projectRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const extPath = realpathSync(join(projectRoot, '.output/chrome-mv3'));
@@ -249,6 +250,53 @@ const browser = await puppeteer.launch({
 
 const errors = [];
 
+// ---------- 发布包校验：商店上传 zip 的 manifest 不得含 key（CWS 拒收），本地加载目录必须保留 key ----------
+// 纯 JS 读 zip（走中央目录定位 + zlib 解压，跨平台无第三方依赖）
+function readZipEntry(zipPath, entryName) {
+  const buf = readFileSync(zipPath);
+  // 从尾部扫描 EOCD（结束中央目录记录，其后的注释区最长 65535 字节）
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= Math.max(0, buf.length - 22 - 65535); i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('未找到 zip 中央目录（EOCD）');
+  const count = buf.readUInt16LE(eocd + 10);
+  let ptr = buf.readUInt32LE(eocd + 16);
+  for (let n = 0; n < count; n++) {
+    if (buf.readUInt32LE(ptr) !== 0x02014b50) throw new Error('zip 中央目录损坏');
+    const method = buf.readUInt16LE(ptr + 10);
+    const compSize = buf.readUInt32LE(ptr + 20);
+    const nameLen = buf.readUInt16LE(ptr + 28);
+    const extraLen = buf.readUInt16LE(ptr + 30);
+    const commentLen = buf.readUInt16LE(ptr + 32);
+    const localOff = buf.readUInt32LE(ptr + 42);
+    const name = buf.toString('utf8', ptr + 46, ptr + 46 + nameLen);
+    if (name === entryName) {
+      // 数据起点在本地文件头之后（本地头的文件名/额外字段长度可能不同于中央目录记录）
+      const dataStart = localOff + 30 + buf.readUInt16LE(localOff + 26) + buf.readUInt16LE(localOff + 28);
+      const data = buf.subarray(dataStart, dataStart + compSize);
+      return method === 8 ? inflateRawSync(data) : Buffer.from(data);
+    }
+    ptr += 46 + nameLen + extraLen + commentLen;
+  }
+  throw new Error(`zip 中不存在 ${entryName}`);
+}
+
+{
+  const dirManifest = JSON.parse(readFileSync(join(extPath, 'manifest.json'), 'utf8'));
+  if (!dirManifest.key) errors.push('本地加载目录 manifest.json 丢失 key 字段（扩展 ID 将随加载路径变化）');
+  const pkg = JSON.parse(readFileSync(join(projectRoot, 'package.json'), 'utf8'));
+  const zipPath = join(projectRoot, `.output/autobookmark-${pkg.version}-chrome.zip`);
+  if (!existsSync(zipPath)) {
+    console.log(`[smoke] 发布包校验: 跳过（未找到 autobookmark-${pkg.version}-chrome.zip；pnpm zip 后重跑可校验）`);
+  } else {
+    const zipManifest = JSON.parse(readZipEntry(zipPath, 'manifest.json').toString('utf8'));
+    const ok = !('key' in zipManifest);
+    console.log(`[smoke] 发布包校验: zip manifest ${ok ? '不含 key ✓' : '仍含 key ✗（CWS 会拒收）'}`);
+    if (!ok) errors.push('商店上传 zip 的 manifest.json 含 key 字段，CWS 上传会被拒收');
+  }
+}
+
 // @webext-core/messaging wire 协议帮助函数（在扩展页面里执行）
 const send = (type, data) => `
   (async () => {
@@ -340,9 +388,30 @@ try {
       return res?.res ?? res;
     })()`);
     const okMigrated =
-      migrated?.bindings && 'agent' in migrated.bindings && 'saveStrategy' in migrated.preferences;
+      migrated?.bindings && 'agent' in migrated.bindings && 'saveStrategy' in migrated.preferences
+        && 'openNewTabInBackground' in migrated.preferences
+        && 'uiLanguage' in migrated.preferences && migrated.preferences.uiLanguage === 'zh';
     console.log(`[smoke] 旧设置迁移: ${okMigrated ? '✓' : '✗'}`);
     if (!okMigrated) errors.push('旧格式设置迁移失败（缺少新字段或保存报错）');
+
+    // 3.4b 全新安装：无 settings 时按浏览器语言推断（期望值按 navigator.language 现场计算，
+    // 测试浏览器的 locale 跟随宿主系统，不能硬编码 en）
+    const inferred = await page.evaluate(`(async () => {
+      const expected = (() => {
+        const lang = (navigator.language ?? '').toLowerCase();
+        if (lang.startsWith('ja')) return 'ja';
+        if (lang.startsWith('zh')) return 'zh';
+        return 'en';
+      })();
+      await chrome.storage.local.remove('settings');
+      const s = await chrome.runtime.sendMessage({ type: 'getSettings', timestamp: Date.now() }).then(r => r.res ?? r);
+      return { expected, actual: s.preferences.uiLanguage };
+    })()`);
+    const okInferred = inferred.expected === inferred.actual;
+    console.log(`[smoke] 全新安装语言推断: ${okInferred ? '✓' : '✗'}（${inferred.actual}，期望 ${inferred.expected}）`);
+    if (!okInferred) errors.push(`全新安装语言推断错误: ${inferred.actual}，期望 ${inferred.expected}`);
+    // 还原迁移后的设置，后续用例继续在 zh 界面下断言
+    await page.evaluate((s) => chrome.storage.local.set({ settings: s }), migrated);
   });
 
   // 3.5 未配置供应商：树浏览 / 右键编辑保存 / 删除 全部可用
@@ -1334,6 +1403,131 @@ try {
     if (tabsAfter > tabsBefore) errors.push('currentTab 模式不应新开标签');
     try { await dummy.close(); } catch { /* 已导航 */ }
     try { await p2.close(); } catch { /* 可能已被 close */ }
+
+    // 后台打开：openNewTabInBackground=true → 新标签页创建但 active=false（焦点留在当前页）
+    const probeBg = await browser.newPage();
+    await probeBg.goto(`chrome-extension://${extensionId}/popup.html`, { waitUntil: 'networkidle0' });
+    await probeBg.evaluate(`(async () => {
+      const s = await chrome.runtime.sendMessage({ type: 'getSettings', timestamp: Date.now() }).then(r => r.res ?? r);
+      s.preferences.bookmarkOpenMode = 'newTab';
+      s.preferences.openNewTabInBackground = true;
+      await chrome.runtime.sendMessage({ type: 'saveSettings', timestamp: Date.now(), data: s });
+    })()`);
+    const p3 = await browser.newPage();
+    await p3.setViewport({ width: 660, height: 600 });
+    await p3.goto(`chrome-extension://${extensionId}/popup.html`, { waitUntil: 'networkidle0' });
+    await new Promise((r) => setTimeout(r, 800));
+    // manifest 无 tabs 权限时标签 url 不可见，只能按 id 对比点击前后差集
+    const tabsBeforeBg = await probeBg.evaluate(() =>
+      chrome.tabs.query({}).then((ts) => ts.map((t) => ({ id: t.id, active: t.active }))),
+    );
+    await p3.evaluate(() => {
+      const row = [...document.querySelectorAll('button')].find((el) => el.textContent?.includes('普通收藏·手动路径'));
+      row?.click();
+    });
+    await new Promise((r) => setTimeout(r, 800));
+    const tabsAfterBg = await probeBg.evaluate(() =>
+      chrome.tabs.query({}).then((ts) => ts.map((t) => ({ id: t.id, active: t.active }))),
+    );
+    const beforeIdsBg = new Set(tabsBeforeBg.map((t) => t.id));
+    const createdBg = tabsAfterBg.filter((t) => !beforeIdsBg.has(t.id));
+    const bgOpened = (await browser.pages()).some((pg) => pg.url().includes('/ok/plain-manual'));
+    const bgInactive = createdBg.length > 0 && createdBg.every((t) => !t.active);
+    console.log(`[smoke] 后台打开新标签页: ${bgOpened ? '✓' : '✗'} 新增标签=${createdBg.length} 不抢焦点=${bgInactive ? '✓' : '✗'}`);
+    if (!bgOpened) errors.push('后台模式未新开标签页');
+    if (bgOpened && !bgInactive) errors.push('后台模式下新标签页抢占了前台焦点');
+    try { await p3.close(); } catch { /* window.close 可能已自行关闭 */ }
+    try { await probeBg.close(); } catch { /* 已关闭 */ }
+
+    // Ctrl/Cmd 修饰键取反后台打开：
+    // 设置关闭时按住 Ctrl/Cmd → 后台打开；设置开启时按住 Ctrl/Cmd → 前台打开
+    const probeCtrl = await browser.newPage();
+    await probeCtrl.goto(`chrome-extension://${extensionId}/popup.html`, { waitUntil: 'networkidle0' });
+    const ctrlClickCase = async (settingBg, expectedActive) => {
+      await probeCtrl.evaluate(`(async () => {
+        const s = await chrome.runtime.sendMessage({ type: 'getSettings', timestamp: Date.now() }).then(r => r.res ?? r);
+        s.preferences.bookmarkOpenMode = 'newTab';
+        s.preferences.openNewTabInBackground = ${settingBg};
+        await chrome.runtime.sendMessage({ type: 'saveSettings', timestamp: Date.now(), data: s });
+      })()`);
+      const p = await browser.newPage();
+      await p.setViewport({ width: 660, height: 600 });
+      await p.goto(`chrome-extension://${extensionId}/popup.html`, { waitUntil: 'networkidle0' });
+      await new Promise((r) => setTimeout(r, 800));
+      const before = await probeCtrl.evaluate(() =>
+        chrome.tabs.query({}).then((ts) => ts.map((t) => ({ id: t.id, active: t.active }))),
+      );
+      await p.evaluate(() => {
+        const row = [...document.querySelectorAll('button')].find((el) => el.textContent?.includes('普通收藏·手动路径'));
+        row?.dispatchEvent(new MouseEvent('click', { ctrlKey: true, bubbles: true }));
+      });
+      await new Promise((r) => setTimeout(r, 800));
+      const after = await probeCtrl.evaluate(() =>
+        chrome.tabs.query({}).then((ts) => ts.map((t) => ({ id: t.id, active: t.active }))),
+      );
+      const beforeIds = new Set(before.map((t) => t.id));
+      const created = after.filter((t) => !beforeIds.has(t.id));
+      const opened = (await browser.pages()).some((pg) => pg.url().includes('/ok/plain-manual'));
+      const inverted = created.length > 0 && created.every((t) => t.active === expectedActive);
+      try { await p.close(); } catch { /* window.close 可能已自行关闭 */ }
+      return { opened, inverted };
+    };
+
+    const offCase = await ctrlClickCase(false, false);
+    console.log(`[smoke] Ctrl+点击(设置关→应后台): ${offCase.opened ? '✓' : '✗'} 取反生效=${offCase.inverted ? '✓' : '✗'}`);
+    if (!offCase.opened) errors.push('Ctrl+点击未新开标签页');
+    if (offCase.opened && !offCase.inverted) errors.push('Ctrl+点击在设置关闭时应为后台打开');
+
+    const onCase = await ctrlClickCase(true, true);
+    console.log(`[smoke] Ctrl+点击(设置开→应前台): ${onCase.opened ? '✓' : '✗'} 取反生效=${onCase.inverted ? '✓' : '✗'}`);
+    if (!onCase.opened) errors.push('Ctrl+点击(设置开)未新开标签页');
+    if (onCase.opened && !onCase.inverted) errors.push('Ctrl+点击在设置开启时应为前台打开');
+    try { await probeCtrl.close(); } catch { /* 已关闭 */ }
+
+    // 多语言：切换 uiLanguage → 新开的 popup 文案跟随（en/ja/zh 各验一个标志性文案）；
+    // 同时验证设置页供应商预设下拉已翻译、两个语言选择器的中文选项统一显示「简体中文」
+    const probeLang = await browser.newPage();
+    await probeLang.goto(`chrome-extension://${extensionId}/popup.html`, { waitUntil: 'networkidle0' });
+    for (const [lang, marker, presetLabel] of [
+      ['en', 'All bookmarks', 'Zhipu BigModel (China)'],
+      ['ja', 'すべてのブックマーク', '智譜 BigModel（中国国内）'],
+      ['zh', '全部书签', '智谱 BigModel (国内)'],
+    ]) {
+      await probeLang.evaluate(`(async () => {
+        const s = await chrome.runtime.sendMessage({ type: 'getSettings', timestamp: Date.now() }).then(r => r.res ?? r);
+        s.preferences.uiLanguage = '${lang}';
+        await chrome.runtime.sendMessage({ type: 'saveSettings', timestamp: Date.now(), data: s });
+      })()`);
+      const p = await browser.newPage();
+      await p.goto(`chrome-extension://${extensionId}/popup.html`, { waitUntil: 'networkidle0' });
+      await new Promise((r) => setTimeout(r, 600));
+      const text = await p.evaluate(() => document.body.innerText);
+      const ok = text.includes(marker);
+      console.log(`[smoke] 界面语言 ${lang}: ${ok ? '✓' : '✗'}`);
+      if (!ok) errors.push(`界面语言 ${lang} 未生效（未找到「${marker}」）`);
+      try { await p.close(); } catch { /* window.close 可能已自行关闭 */ }
+
+      const sp = await browser.newPage();
+      await sp.goto(`chrome-extension://${extensionId}/options.html`, { waitUntil: 'networkidle0' });
+      await new Promise((r) => setTimeout(r, 600));
+      const presetOpt = await sp.evaluate(() =>
+        document.querySelector('select option[value="zai-cn"]')?.textContent?.trim() ?? '',
+      );
+      // 切到「偏好」tab（nav 第 3 个按钮），检查 AI 语言与界面语言两个选择器
+      await sp.evaluate(() => document.querySelectorAll('nav button')[2]?.click());
+      await new Promise((r) => setTimeout(r, 300));
+      const zhLabels = await sp.evaluate(() =>
+        [...document.querySelectorAll('select option[value="zh"]')].map((o) => o.textContent?.trim()),
+      );
+      // 下拉选项渲染为「名称 — baseURL」，只断言名称部分
+      const okPreset = presetOpt.startsWith(`${presetLabel} —`);
+      const okZhLabel = zhLabels.length >= 2 && zhLabels.every((x) => x === '简体中文');
+      console.log(`[smoke] 设置页文案 ${lang}: 预设下拉=${okPreset ? '✓' : '✗'} 中文选项=${okZhLabel ? '✓' : '✗'}`);
+      if (!okPreset) errors.push(`界面语言 ${lang} 供应商预设下拉未翻译（得到「${presetOpt}」）`);
+      if (!okZhLabel) errors.push(`界面语言 ${lang} 语言选项应为「简体中文」（得到 ${JSON.stringify(zhLabels)}）`);
+      try { await sp.close(); } catch { /* ignore */ }
+    }
+    try { await probeLang.close(); } catch { /* 已关闭 */ }
   });
 } finally {
   await browser.close();

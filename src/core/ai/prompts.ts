@@ -1,18 +1,18 @@
 import type { ChatMessage } from '../providers/client';
 import type { PageContent } from '../../shared/types';
 
-const LANG_LABEL: Record<string, string> = { zh: '中文', en: 'English' };
+const LANG_LABEL: Record<string, string> = { zh: '中文', ja: '日本語', en: 'English' };
 
 export function buildEnhanceMessages(
   page: PageContent,
-  opts: { language: 'zh' | 'en'; maxContentChars: number; existingFolders?: string[] },
+  opts: { language: 'zh' | 'ja' | 'en'; maxContentChars: number; existingFolders?: string[] },
 ): ChatMessage[] {
   const lang = LANG_LABEL[opts.language] ?? '中文';
   const system = [
     '你是书签整理助手。根据网页信息为这条书签生成元数据，要求：',
     `- title：简洁准确的书签标题（不超过 40 字），去除营销词与站点名冗余，用${lang}；若原标题已是${lang}且合适则沿用`,
     `- summary：一句话概括页面核心内容（不超过 80 字，${lang}）`,
-    '- tags：3~5 个标签，小写英文或通用中文短词，覆盖主题与技术点，不要 # 号',
+    '- tags：3~5 个标签，小写英文或通用' + lang + '短词，覆盖主题与技术点，不要 # 号',
   ];
   if (opts.existingFolders?.length) {
     system.push(
@@ -61,7 +61,7 @@ export function buildEnhanceMessages(
 
 export function buildTldrMessages(
   page: PageContent,
-  opts: { language: 'zh' | 'en'; maxContentChars: number },
+  opts: { language: 'zh' | 'ja' | 'en'; maxContentChars: number },
 ): ChatMessage[] {
   const lang = LANG_LABEL[opts.language] ?? '中文';
   const system = [
@@ -108,7 +108,7 @@ function itemList(items: BatchItem[]): string {
 /** 批量补全元数据：每批一批书签（标题+URL）→ JSON 数量 */
 export function buildBatchEnhanceMessages(
   items: BatchItem[],
-  opts: { language: 'zh' | 'en' },
+  opts: { language: 'zh' | 'ja' | 'en' },
 ): ChatMessage[] {
   const lang = LANG_LABEL[opts.language] ?? '中文';
   const system = [

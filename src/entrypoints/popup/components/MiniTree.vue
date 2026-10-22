@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import type { MetaBrief, TreeNodeDto } from '../../../shared/types';
 import { tooltipIfTruncated } from '../../../shared/ui';
+import { useI18n } from '../../../shared/i18n';
 import FaviconImg from '../../../components/FaviconImg.vue';
 import { beginRowDrag, draggingId, dropHint, shouldSuppressClick } from '../../../shared/dnd';
+
+const t = useI18n();
 
 const props = defineProps<{
   nodes: TreeNodeDto[];
@@ -13,17 +16,17 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   toggle: [node: TreeNodeDto];
-  open: [node: TreeNodeDto];
+  open: [node: TreeNodeDto, e?: MouseEvent];
   contextMenu: [payload: { node: TreeNodeDto; x: number; y: number }];
 }>();
 
 /** 顶层即 Chrome 根文件夹（书签栏等）：不可拖动，只接受移入 */
 const isRootLevel = () => (props.depth ?? 0) === 0;
 
-function onRowClick(node: TreeNodeDto, act: 'toggle' | 'open') {
+function onRowClick(node: TreeNodeDto, act: 'toggle' | 'open', e?: MouseEvent) {
   if (shouldSuppressClick()) return;
   if (act === 'toggle') emit('toggle', node);
-  else emit('open', node);
+  else emit('open', node, e);
 }
 
 function hintClass(node: TreeNodeDto): string {
@@ -69,8 +72,8 @@ function hintClass(node: TreeNodeDto): string {
         :style="{ paddingLeft: `${(depth ?? 0) * 12 + 4}px` }"
         :data-ab-node="node.id"
         :data-ab-type="'bookmark'"
-        @click="onRowClick(node, 'open')"
-        @auxclick.middle="emit('open', node)"
+        @click="onRowClick(node, 'open', $event)"
+        @auxclick.middle="emit('open', node, $event)"
         @mousedown="beginRowDrag(node, $event, false)"
         @dragstart.prevent
         @contextmenu.prevent.stop="emit('contextMenu', { node, x: $event.clientX, y: $event.clientY })"
@@ -81,7 +84,7 @@ function hintClass(node: TreeNodeDto): string {
         <span
           v-if="metaById[node.id]?.summary"
           class="shrink-0 hidden group-hover:block text-[9px] px-1 rounded bg-indigo-100 text-indigo-500"
-          title="已 AI 增强"
+          :title="t('miniTree.enhancedTitle')"
           >AI</span
         >
       </button>
@@ -94,7 +97,7 @@ function hintClass(node: TreeNodeDto): string {
         :meta-by-id="metaById"
         :depth="(depth ?? 0) + 1"
         @toggle="emit('toggle', $event)"
-        @open="emit('open', $event)"
+        @open="(node, e) => emit('open', node, e)"
         @context-menu="emit('contextMenu', $event)"
       />
     </div>

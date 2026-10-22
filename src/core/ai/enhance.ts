@@ -3,6 +3,7 @@ import type { BookmarkDraft, PageContent } from '../../shared/types';
 import { createClient, AiClientError, type ChatMessage } from '../providers/client';
 import { buildEnhanceMessages } from './prompts';
 import { trackUsage } from './usage';
+import { rt, type I18nKey } from '../../shared/i18n';
 import type { ModelRef, Settings } from '../storage/settings';
 
 const draftSchema = z.object({
@@ -18,7 +19,7 @@ export function extractJson(text: string): unknown {
   const candidate = fenced ? fenced[1]! : text;
   const start = candidate.indexOf('{');
   const end = candidate.lastIndexOf('}');
-  if (start < 0 || end <= start) throw new Error('输出中未找到 JSON 对象');
+  if (start < 0 || end <= start) throw new Error(rt('err.noJsonInOutput'));
   return JSON.parse(candidate.slice(start, end + 1));
 }
 
@@ -39,7 +40,14 @@ export { normalizeTags };
 
 export class NotConfiguredError extends Error {
   constructor(task: string) {
-    super(`尚未为「${task}」配置 AI 模型，请先到设置页完成配置`);
+    // task 传任务 id（enhance/tldr/embedding/agent），短名经运行时词典本地化
+    const TASK_KEYS: Record<string, I18nKey> = {
+      enhance: 'task.shortEnhance',
+      tldr: 'task.shortTldr',
+      embedding: 'task.shortEmbedding',
+      agent: 'task.shortAgent',
+    };
+    super(rt('err.notConfigured', { task: rt(TASK_KEYS[task] ?? 'task.shortEnhance') }));
     this.name = 'NotConfiguredError';
   }
 }
@@ -131,11 +139,11 @@ export async function chatJson<T>(
     } catch (e) {
       lastOutput = text;
       if (attempt === 1) {
-        throw new Error(`AI 输出无法解析：${(e as Error).message}`);
+        throw new Error(rt('err.aiOutputUnparseable', { msg: (e as Error).message }));
       }
     }
   }
-  throw new Error('AI 未能生成有效输出，请重试');
+  throw new Error(rt('err.aiNoValidOutput'));
 }
 
 /**

@@ -1,5 +1,6 @@
 import { browser } from 'wxt/browser';
 import { z } from 'zod';
+import { rt, listSep } from '../../shared/i18n';
 import type { OrganizeJob, UndoEntry } from '../../shared/types';
 import type { Settings } from '../storage/settings';
 import { bumpLibraryVersion } from '../storage/db';
@@ -63,7 +64,7 @@ export async function prepareClassify(job: OrganizeJob, settings: Settings): Pro
   if (scope === 'folder') {
     // 指定文件夹：仅以该子树内的书签为输入；目标文件夹自身不进 sweep 名单（清空也不删）
     const folder = findNode(tree, params.folderId ?? '');
-    if (!folder || folder.url) throw new Error('未找到目标文件夹');
+    if (!folder || folder.url) throw new Error(rt('err.targetFolderNotFound'));
     scopeNodes = [folder];
     const collectInner = (nodes: typeof tree): void => {
       for (const node of nodes) {
@@ -304,17 +305,19 @@ export async function processClassifyBatch(settings: Settings, job: OrganizeJob)
     const assigned = Object.values(p.assignments).filter((c) => c !== '未定').length;
     const undecided = params.items.length - assigned;
     const topCount = new Set(p.categories.map((c) => c.split('/')[0])).size;
+    const sep = listSep();
+    const trunc = (arr: string[], max: number) => `${arr.slice(0, max).join(sep)}${arr.length > max ? '…' : ''}`;
     const folderLine = p.createdFolderIds.length
       ? params.maxDepth >= 2
-        ? `已建 ${topCount} 个大类 / ${p.createdFolderIds.length} 个文件夹（${p.categories.slice(0, 6).join('、')}${p.categories.length > 6 ? '…' : ''}）`
-        : `已建 ${p.createdFolderIds.length} 个分类文件夹（${p.categories.slice(0, 8).join('、')}${p.categories.length > 8 ? '…' : ''}）`
-      : '没有生成新的分类文件夹';
+        ? rt('organize.reportBuiltHierarchical', { top: topCount, n: p.createdFolderIds.length, list: trunc(p.categories, 6) })
+        : rt('organize.reportBuilt', { n: p.createdFolderIds.length, list: trunc(p.categories, 8) })
+      : rt('organize.reportNoFolders');
     job.result = {
       report: [
         folderLine,
-        `已移动 ${assigned} 条书签`,
-        `未归类 ${undecided} 条保留原地`,
-        `清理空文件夹 ${p.removedFolders} 个`,
+        rt('organize.reportMoved', { n: assigned }),
+        rt('organize.reportUndecided', { n: undecided }),
+        rt('organize.reportCleaned', { n: p.removedFolders }),
       ],
     };
   }

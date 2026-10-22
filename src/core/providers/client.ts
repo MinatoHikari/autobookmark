@@ -1,5 +1,6 @@
 import type { ProviderConfig } from '../storage/settings';
 import { browser } from 'wxt/browser';
+import { rt } from '../../shared/i18n';
 
 export interface ChatToolCall {
   id: string;
@@ -67,12 +68,12 @@ async function errorFromResponse(res: Response): Promise<AiClientError> {
     /* ignore */
   }
   if (res.status === 401 || res.status === 403) {
-    return new AiClientError('鉴权失败：请检查 API Key 是否正确', res.status, detail);
+    return new AiClientError(rt('client.authFailed'), res.status, detail);
   }
   if (res.status === 429) {
-    return new AiClientError('请求过于频繁或余额不足（429）', res.status, detail);
+    return new AiClientError(rt('client.rateLimited'), res.status, detail);
   }
-  return new AiClientError(`供应商返回 HTTP ${res.status}`, res.status, detail);
+  return new AiClientError(rt('client.httpStatus', { code: res.status }), res.status, detail);
 }
 
 /**
@@ -121,7 +122,7 @@ export function createClient(provider: ProviderConfig) {
     }
 
     // SSE 流式解析
-    if (!res.body) throw new AiClientError('供应商未返回流式响应体');
+    if (!res.body) throw new AiClientError(rt('client.noStreamBody'));
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';

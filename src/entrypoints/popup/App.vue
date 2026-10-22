@@ -5,8 +5,9 @@ import { sendMessage } from '../../shared/messages';
 import { startStream } from '../../shared/stream';
 import type { BookmarkDraft, BookmarkMeta, PageContent } from '../../shared/types';
 import type { Settings } from '../../core/storage/settings';
-import { formatTime, hostOf, tooltipIfTruncated, openInCurrentTab, openInWindow } from '../../shared/ui';
+import { formatTime, hostOf, tooltipIfTruncated, openInCurrentTab, openInNewTab, openInWindow, backgroundOpen } from '../../shared/ui';
 import { resolveDropTarget, setNodeDropHandler, type TreeDropEvent } from '../../shared/dnd';
+import { useI18n } from '../../shared/i18n';
 import { findNode, flattenBookmarks } from '../../core/organize/scan';
 import type { MetaBrief, SearchResultItem, TreeNodeDto } from '../../shared/types';
 import MiniTree from './components/MiniTree.vue';
@@ -26,6 +27,7 @@ type Phase =
 
 const phase = ref<Phase>('loading');
 const errorMsg = ref('');
+const t = useI18n();
 const settings = ref<Settings | null>(null);
 const existingMeta = ref<BookmarkMeta | null>(null);
 const savedMeta = ref<BookmarkMeta | null>(null);
@@ -56,7 +58,7 @@ const configured = computed(() => !!settings.value?.bindings.enhance);
 
 async function loadPageContent(): Promise<PageContent> {
   if (page.value) return page.value;
-  if (tabId.value == null) throw new Error('未找到当前标签页');
+  if (tabId.value == null) throw new Error(t('popup.errorNoTab'));
   const p = await sendMessage('extractPage', tabId.value);
   page.value = p;
   return p;
@@ -95,7 +97,7 @@ function removeTag(tag: string) {
 
 async function save() {
   if (!draft.title.trim()) {
-    errorMsg.value = '标题不能为空';
+    errorMsg.value = t('common.errorTitleRequired');
     return;
   }
   errorMsg.value = '';
@@ -272,7 +274,7 @@ function toggleTreeNode(node: TreeNodeDto) {
   void browser.storage.local.set({ [TREE_EXPANDED_KEY]: [...next] }).catch(() => {});
 }
 
-async function openBookmark(node: TreeNodeDto) {
+async function openBookmark(node: TreeNodeDto, e?: MouseEvent) {
   if (!node.url) return;
   if (settings.value?.preferences.bookmarkOpenMode === 'currentTab') {
     const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
@@ -282,7 +284,7 @@ async function openBookmark(node: TreeNodeDto) {
       return;
     }
   }
-  await browser.tabs.create({ url: node.url });
+  await openInNewTab(node.url, backgroundOpen(settings.value?.preferences.openNewTabInBackground, e));
   window.close();
 }
 
@@ -292,12 +294,12 @@ async function onTreeDrop({ targetId, zone, draggedId }: TreeDropEvent) {
   if (!target) return;
   const res = resolveDropTarget(treeNodes.value, draggedId, target, zone);
   if (!res.ok) {
-    if (res.reason === 'invalid') showToast('不能移动到该位置');
+    if (res.reason === 'invalid') showToast(t('popup.toastInvalidDrop'));
     return;
   }
   const ok = await sendMessage('moveNode', { id: draggedId, newParentId: res.parentId, index: res.index });
   if (!ok) {
-    showToast('移动失败（可能是系统文件夹或非法目标）');
+    showToast(t('common.toastMoveFailed'));
     return;
   }
   await reloadTree();
@@ -317,7 +319,7 @@ function onTreeQueryInput() {
   }, 250);
 }
 
-async function openResult(item: SearchResultItem) {
+async function openResult(item: SearchResultItem, e?: MouseEvent) {
   if (settings.value?.preferences.bookmarkOpenMode === 'currentTab') {
     const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
     if (tab?.id) {
@@ -326,7 +328,7 @@ async function openResult(item: SearchResultItem) {
       return;
     }
   }
-  await browser.tabs.create({ url: item.url });
+  await openInNewTab(item.url, backgroundOpen(settings.value?.preferences.openNewTabInBackground, e));
   window.close();
 }
 
@@ -387,14 +389,14 @@ async function confirmCreateFolder() {
   const form = newFolderForm.value;
   const name = form?.name.trim();
   if (!form || !name) {
-    createError.value = '文件夹名称不能为空';
+    createError.value = t('popup.errorFolderNameRequired');
     return;
   }
   try {
     await sendMessage('createFolder', { parentId: form.node.id, title: name });
     newFolderForm.value = null;
     await reloadTree();
-    showToast('文件夹已创建');
+    showToast(t('popup.toastFolderCreated'));
   } catch (e) {
     createError.value = (e as Error).message;
   }
@@ -411,11 +413,11 @@ async function confirmCreateBookmark() {
   const title = form?.title.trim();
   const url = form?.url.trim();
   if (!form || !title) {
-    createError.value = '标题不能为空';
+    createError.value = t('common.errorTitleRequired');
     return;
   }
   if (!url || !/^https?:\/\//i.test(url)) {
-    createError.value = '链接必须以 http:// 或 https:// 开头';
+    createError.value = t('common.errorUrlProtocol');
     return;
   }
   try {
@@ -426,7 +428,7 @@ async function confirmCreateBookmark() {
     });
     newBookmarkForm.value = null;
     await reloadTree();
-    showToast('书签已创建');
+    showToast(t('popup.toastBookmarkCreated'));
   } catch (e) {
     createError.value = (e as Error).message;
   }
@@ -450,7 +452,7 @@ async function confirmDeleteAction() {
   if (!node) return;
   await sendMessage('removeNode', node.id);
   await reloadTree();
-  showToast(node.url ? '书签已删除' : '文件夹已删除');
+  showToast(node.url ? t('popup.toastBookmarkDeleted') : t('popup.toastFolderDeleted'));
 }
 
 function openCtxMenu(payload: { node: TreeNodeDto; x: number; y: number }) {
@@ -467,14 +469,14 @@ async function ctxOpenWhere(node: TreeNodeDto, where: 'current' | 'newTab' | 'wi
   const url = node.url ?? '';
   if (!url) return;
   if (where === 'current') await openInCurrentTab(url);
-  else if (where === 'newTab') await browser.tabs.create({ url });
+  else if (where === 'newTab') await openInNewTab(url, settings.value?.preferences.openNewTabInBackground);
   else await openInWindow(url, where === 'incognito');
   window.close();
 }
 
 function ctxOpen(node: TreeNodeDto) {
   ctxMenu.value = null;
-  void browser.tabs.create({ url: node.url ?? '' });
+  void openInNewTab(node.url ?? '', settings.value?.preferences.openNewTabInBackground);
   window.close();
 }
 
@@ -482,7 +484,7 @@ async function ctxCopyLink(node: TreeNodeDto) {
   ctxMenu.value = null;
   try {
     await navigator.clipboard.writeText(node.url ?? '');
-    showToast('链接已复制');
+    showToast(t('popup.toastLinkCopied'));
   } catch {
     /* 剪贴板不可用时静默 */
   }
@@ -502,12 +504,12 @@ function ctxOpenManager() {
 async function ctxEnhance(node: TreeNodeDto) {
   ctxMenu.value = null;
   if (node.url) {
-    showToast('AI 增强中…');
+    showToast(t('popup.toastEnhancing'));
     try {
       await sendMessage('enhanceExisting', node.id);
-      showToast('已增强');
+      showToast(t('popup.toastEnhanced'));
     } catch (e) {
-      showToast(`增强失败：${(e as Error).message}`);
+      showToast(t('popup.toastEnhanceFailed', { msg: (e as Error).message }));
       return;
     }
     await reloadTree();
@@ -515,12 +517,12 @@ async function ctxEnhance(node: TreeNodeDto) {
   }
   const ids = flattenBookmarks([node], []).map((b) => b.id);
   if (!ids.length) {
-    showToast('文件夹里没有可增强的书签');
+    showToast(t('common.folderEmptyToast'));
     return;
   }
   try {
     await sendMessage('startJob', { kind: 'enhance', params: { ids, fetchContent: false } });
-    showToast(`已开始后台增强 ${ids.length} 条，可关闭窗口`);
+    showToast(t('popup.toastEnhanceStarted', { n: ids.length }));
   } catch (e) {
     showToast((e as Error).message);
   }
@@ -529,14 +531,14 @@ async function ctxEnhance(node: TreeNodeDto) {
 async function ctxReclassify(node: TreeNodeDto) {
   ctxMenu.value = null;
   if (node.url) {
-    showToast('AI 挑选目录中…');
+    showToast(t('popup.toastReclassifying'));
     try {
       const r = await sendMessage('reclassifyBookmark', node.id);
-      if (r.ok && r.folder) showToast(`已移至 ${r.folder}`);
-      else if (r.reason === 'no-candidates') showToast('没有可用的目标目录');
-      else showToast('AI 未能确定目标目录');
+      if (r.ok && r.folder) showToast(t('common.toastMovedTo', { folder: r.folder }));
+      else if (r.reason === 'no-candidates') showToast(t('common.toastNoCandidates'));
+      else showToast(t('common.toastNoFolderDecided'));
     } catch (e) {
-      showToast(`分类失败：${(e as Error).message}`);
+      showToast(t('common.toastClassifyFailed', { msg: (e as Error).message }));
       return;
     }
     await reloadTree();
@@ -549,7 +551,7 @@ async function ctxReclassify(node: TreeNodeDto) {
     : { scope: 'folder', folderId: node.id, maxCategories: 12 };
   try {
     await sendMessage('startJob', { kind: 'classify', params });
-    showToast('已开始后台重新分类，可关闭窗口');
+    showToast(t('popup.toastReclassifyStarted'));
   } catch (e) {
     showToast((e as Error).message);
   }
@@ -589,7 +591,7 @@ async function confirmRenameFolder() {
   const form = renameFolderForm.value;
   const name = form?.name.trim();
   if (!form || !name) {
-    createError.value = '文件夹名称不能为空';
+    createError.value = t('popup.errorFolderNameRequired');
     return;
   }
   if (name === form.node.title) {
@@ -600,7 +602,7 @@ async function confirmRenameFolder() {
     await sendMessage('renameNode', { id: form.node.id, title: name });
     renameFolderForm.value = null;
     await reloadTree();
-    showToast('已重命名');
+    showToast(t('popup.toastRenamed'));
   } catch (e) {
     createError.value = (e as Error).message;
   }
@@ -659,7 +661,7 @@ onMounted(async () => {
       <span class="font-semibold text-sm">AutoBookmark</span>
       <span class="flex-1"></span>
       <button
-        title="打开书签管理 (Alt+Shift+B)"
+        :title="t('popup.tipOpenManager')"
         class="p-1.5 rounded-md text-slate-500 hover:bg-slate-100"
         @click="openManager"
       >
@@ -669,7 +671,7 @@ onMounted(async () => {
         </svg>
       </button>
       <button
-        title="设置"
+        :title="t('common.settings')"
         class="p-1.5 rounded-md text-slate-500 hover:bg-slate-100"
         @click="openManagerSettings"
       >
@@ -690,20 +692,20 @@ onMounted(async () => {
     <!-- 左栏：书签树（分节头 + 搜索框固定，树/结果滚动） -->
     <aside class="w-1/2 shrink-0 flex flex-col border-r border-slate-200 px-2.5 pt-3 pb-1">
       <div class="flex items-center gap-2 shrink-0">
-        <span class="text-xs font-semibold text-slate-500">🌳 全部书签</span>
+        <span class="text-xs font-semibold text-slate-500">{{ t('popup.allBookmarks') }}</span>
         <span class="flex-1"></span>
         <button
           class="text-[11px] text-indigo-500 hover:underline"
-          title="树操作 / 整理中心"
+          :title="t('popup.tipTreeActions')"
           @click="openManager"
         >
-          完整管理页 ↗
+          {{ t('popup.openFullManager') }}
         </button>
       </div>
       <input
         v-model="treeQuery"
         @input="onTreeQueryInput"
-        placeholder="搜索全部书签…"
+        :placeholder="t('popup.searchPlaceholder')"
         class="shrink-0 mt-2 w-full px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-[13px] focus:outline-none focus:border-indigo-400"
       />
       <div
@@ -718,8 +720,8 @@ onMounted(async () => {
           v-for="item in treeResults"
           :key="item.bookmarkId"
           class="w-full flex items-start gap-2 rounded-lg px-2 py-2 text-left hover:bg-white transition-colors"
-          @click="openResult(item)"
-          @auxclick.middle="openResult(item)"
+          @click="openResult(item, $event)"
+          @auxclick.middle="openResult(item, $event)"
         >
           <FaviconImg :url="item.url" class="w-4 h-4 mt-0.5 rounded shrink-0" loading="lazy" />
           <span class="min-w-0">
@@ -727,7 +729,7 @@ onMounted(async () => {
             <span class="block text-[10px] text-slate-400 truncate">{{ item.folderPath || hostOf(item.url) }}</span>
           </span>
         </button>
-        <p v-if="!treeResults.length" class="py-10 text-center text-xs text-slate-400">没有匹配的书签</p>
+        <p v-if="!treeResults.length" class="py-10 text-center text-xs text-slate-400">{{ t('common.noResults') }}</p>
       </template>
 
       <!-- 树 -->
@@ -753,22 +755,22 @@ onMounted(async () => {
     <!-- 右栏：收藏区（独立滚动） -->
     <section class="flex-1 min-w-0 overflow-y-auto px-3 py-3 space-y-3">
       <!-- 加载中 -->
-      <div v-if="phase === 'loading'" class="py-4 text-center text-sm text-slate-400">加载中…</div>
+      <div v-if="phase === 'loading'" class="py-4 text-center text-sm text-slate-400">{{ t('common.loading') }}</div>
 
       <!-- 未配置 -->
       <div v-else-if="phase === 'needsSetup' || (phase === 'idle' && !configured)" class="flex items-center gap-3 rounded-xl bg-amber-50 border border-amber-200 p-3">
         <span class="text-xl shrink-0">🔌</span>
         <div class="min-w-0 flex-1">
-          <p class="text-xs font-semibold text-amber-800">还未设置 AI 供应商</p>
+          <p class="text-xs font-semibold text-amber-800">{{ t('popup.noProviderTitle') }}</p>
           <p class="text-[11px] text-amber-700/80 mt-0.5 leading-relaxed">
-            配置后即可智能收藏与 TL;DR；下方书签浏览不受影响
+            {{ t('popup.noProviderDesc') }}
           </p>
         </div>
         <button
           class="shrink-0 px-3 py-1.5 rounded-lg bg-amber-500 text-white text-xs font-medium hover:bg-amber-600"
           @click="openManagerSettings"
         >
-          去设置
+          {{ t('popup.goSettings') }}
         </button>
       </div>
 
@@ -776,8 +778,8 @@ onMounted(async () => {
       <div v-else-if="phase === 'unsupported'" class="flex items-center gap-3 rounded-xl bg-slate-100 p-3">
         <span class="text-xl shrink-0">🚫</span>
         <div class="min-w-0">
-          <p class="text-xs font-semibold text-slate-600">此页面暂不支持收藏</p>
-          <p class="text-[11px] text-slate-400 mt-0.5">浏览器内部页面无法提取正文</p>
+          <p class="text-xs font-semibold text-slate-600">{{ t('popup.unsupportedTitle') }}</p>
+          <p class="text-[11px] text-slate-400 mt-0.5">{{ t('popup.unsupportedDesc') }}</p>
         </div>
       </div>
 
@@ -807,16 +809,16 @@ onMounted(async () => {
               </span>
             </div>
             <p class="text-[11px] text-slate-400">
-              已于 {{ formatTime(existingMeta.createdAt) }} 收藏{{ existingMeta.folderPath ? ' · ' + existingMeta.folderPath : '' }}
+              {{ t('popup.savedAt', { time: formatTime(existingMeta.createdAt) }) }}{{ existingMeta.folderPath ? ' · ' + existingMeta.folderPath : '' }}
             </p>
           </div>
-          <p v-else class="mt-2 text-xs text-slate-500">这个页面已在书签中</p>
+          <p v-else class="mt-2 text-xs text-slate-500">{{ t('popup.alreadyBookmarked') }}</p>
         </div>
         <button
           class="w-full py-2 rounded-lg border border-slate-200 bg-white text-sm text-slate-600 hover:bg-slate-50"
           @click="openManager"
         >
-          在侧边栏中查看
+          {{ t('popup.viewInManager') }}
         </button>
       </div>
 
@@ -833,7 +835,7 @@ onMounted(async () => {
 
           <div v-if="phase === 'idle'" class="mt-2.5 space-y-2">
             <label class="flex items-center gap-1.5">
-              <span class="shrink-0 text-[10px] text-slate-400">保存到</span>
+              <span class="shrink-0 text-[10px] text-slate-400">{{ t('popup.saveTo') }}</span>
               <select
                 v-model="savePath"
                 class="flex-1 min-w-0 px-2 py-1 rounded-lg border border-slate-200 bg-white text-[11px] text-slate-600 focus:outline-none focus:border-indigo-400"
@@ -847,14 +849,14 @@ onMounted(async () => {
                 class="py-1.5 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 text-xs font-medium hover:bg-indigo-100"
                 @click="savePlain"
               >
-                🔖 收藏
+                {{ t('popup.saveBtn') }}
               </button>
               <button
                 :disabled="!configured"
                 class="py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed"
                 @click="startEnhance"
               >
-                ✨ AI 收藏
+                {{ t('popup.saveAiBtn') }}
               </button>
             </div>
             <button
@@ -863,7 +865,7 @@ onMounted(async () => {
               :disabled="tldrState === 'loading' || tldrState === 'streaming'"
               @click="runTldr"
             >
-              {{ tldrState === 'loading' || tldrState === 'streaming' ? '总结中…' : '⚡ 页面 TL;DR' }}
+              {{ tldrState === 'loading' || tldrState === 'streaming' ? t('popup.tldrRunning') : t('popup.tldrBtn') }}
             </button>
           </div>
 
@@ -871,7 +873,7 @@ onMounted(async () => {
             <div class="h-3.5 rounded bg-slate-100 animate-pulse w-3/4"></div>
             <div class="h-3 rounded bg-slate-100 animate-pulse w-full"></div>
             <div class="h-3 rounded bg-slate-100 animate-pulse w-5/6"></div>
-            <p class="text-xs text-slate-400 pt-1">AI 正在阅读页面，生成标题、摘要与标签…</p>
+            <p class="text-xs text-slate-400 pt-1">{{ t('popup.enhancingHint') }}</p>
           </div>
         </div>
 
@@ -880,14 +882,14 @@ onMounted(async () => {
       <!-- 草稿编辑 -->
       <div v-else-if="phase === 'draft' || phase === 'saving'" class="rounded-xl bg-white border border-slate-200 p-3 space-y-3">
         <label class="block">
-          <span class="text-xs font-medium text-slate-500">标题</span>
+          <span class="text-xs font-medium text-slate-500">{{ t('common.title') }}</span>
           <input
             v-model="draft.title"
             class="mt-1 w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
           />
         </label>
         <label class="block">
-          <span class="text-xs font-medium text-slate-500">摘要</span>
+          <span class="text-xs font-medium text-slate-500">{{ t('common.summary') }}</span>
           <textarea
             v-model="draft.summary"
             rows="3"
@@ -895,7 +897,7 @@ onMounted(async () => {
           ></textarea>
         </label>
         <div>
-          <span class="text-xs font-medium text-slate-500">标签</span>
+          <span class="text-xs font-medium text-slate-500">{{ t('common.tags') }}</span>
           <div class="mt-1 flex flex-wrap gap-1">
             <span
               v-for="tag in draft.tags"
@@ -908,13 +910,13 @@ onMounted(async () => {
           </div>
           <input
             v-model="newTag"
-            placeholder="回车添加标签"
+            :placeholder="t('common.tagInputPlaceholder')"
             class="mt-1.5 w-full px-2.5 py-1 rounded-lg border border-dashed border-slate-300 text-xs focus:outline-none focus:border-indigo-400"
             @keydown.enter.prevent="addTag"
           />
         </div>
         <label class="block">
-          <span class="text-xs font-medium text-slate-500">保存路径（AI 建议，可手动改）</span>
+          <span class="text-xs font-medium text-slate-500">{{ t('popup.savePathLabel') }}</span>
           <select
             v-model="savePath"
             class="mt-1 w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs bg-white focus:outline-none focus:border-indigo-400"
@@ -928,14 +930,14 @@ onMounted(async () => {
             class="flex-1 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50"
             @click="phase = 'idle'"
           >
-            取消
+            {{ t('common.cancel') }}
           </button>
           <button
             class="flex-1 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700 disabled:opacity-50"
             :disabled="phase === 'saving'"
             @click="save"
           >
-            {{ phase === 'saving' ? '保存中…' : '保存书签' }}
+            {{ phase === 'saving' ? t('common.saving') : t('popup.saveBookmarkBtn') }}
           </button>
         </div>
       </div>
@@ -943,7 +945,7 @@ onMounted(async () => {
       <!-- 已保存 -->
       <div v-else-if="phase === 'saved'" class="text-center py-6 space-y-3">
         <div class="text-3xl">✅</div>
-        <p class="text-sm font-medium">已收藏</p>
+        <p class="text-sm font-medium">{{ t('popup.savedTitle') }}</p>
         <p v-if="savedMeta" class="text-xs text-slate-500">
           {{ savedMeta.folderPath || '书签栏' }} · {{ formatTime(savedMeta.createdAt) }}
         </p>
@@ -951,7 +953,7 @@ onMounted(async () => {
           class="px-4 py-1.5 rounded-lg border border-slate-200 bg-white text-xs text-slate-600 hover:bg-slate-50"
           @click="openManager"
         >
-          在侧边栏中查看
+          {{ t('popup.viewInManager') }}
         </button>
       </div>
 
@@ -988,14 +990,14 @@ onMounted(async () => {
         class="w-full py-1.5 rounded-lg border border-slate-200 bg-white text-xs text-slate-600 hover:bg-slate-50 flex items-center justify-center gap-1.5"
         @click="savePlain"
       >
-        🔖 普通收藏（无需 AI）
+        {{ t('popup.plainCollectBtn') }}
       </button>
     </section>
     </div>
 
     <footer class="px-4 py-1.5 border-t border-slate-200 bg-white">
       <p class="text-[10px] text-slate-400 text-center">
-        快捷键 Alt+B · 右键菜单也可收藏 · 内容仅发送至你配置的 AI 供应商
+        {{ t('popup.footerHint') }}
       </p>
     </footer>
 
@@ -1026,7 +1028,7 @@ onMounted(async () => {
               <p v-if="ctxMenu.node.url" class="text-[10px] text-slate-400 truncate mt-0.5">
                 {{ hostOf(ctxMenu.node.url) }}
               </p>
-              <p v-else class="text-[10px] text-slate-400 mt-0.5">文件夹 · {{ ctxMenu.node.children.length }} 项</p>
+              <p v-else class="text-[10px] text-slate-400 mt-0.5">{{ t('popup.folderItemCount', { n: ctxMenu.node.children.length }) }}</p>
             </div>
           </div>
         </div>
@@ -1036,90 +1038,90 @@ onMounted(async () => {
             class="w-full flex items-center justify-between px-3 py-1.5 text-xs text-indigo-600 hover:bg-indigo-50 font-medium"
             @click="ctxEnhance(ctxMenu.node)"
           >
-            <span>✨ AI 增强</span><span class="text-slate-400">⚡</span>
+            <span>{{ t('common.ctxEnhance') }}</span><span class="text-slate-400">⚡</span>
           </button>
           <button
             class="w-full flex items-center justify-between px-3 py-1.5 text-xs text-indigo-600 hover:bg-indigo-50 font-medium"
             @click="ctxReclassify(ctxMenu.node)"
           >
-            <span>🗂 智能重新分类</span><span class="text-slate-400">⇄</span>
+            <span>{{ t('common.ctxReclassify') }}</span><span class="text-slate-400">⇄</span>
           </button>
           <div class="my-1 border-t border-slate-100"></div>
           <button
             class="w-full flex items-center justify-between px-3 py-1.5 text-xs text-slate-700 hover:bg-indigo-50"
             @click="ctxEdit(ctxMenu.node)"
           >
-            <span>{{ ctxMenu.node.url ? '编辑' : '重命名' }}</span><span class="text-slate-400">✎</span>
+            <span>{{ ctxMenu.node.url ? t('common.edit') : t('common.rename') }}</span><span class="text-slate-400">✎</span>
           </button>
           <button
             v-if="ctxMenu.node.url && settings?.preferences.bookmarkOpenMode === 'newTab'"
             class="w-full flex items-center justify-between px-3 py-1.5 text-xs text-slate-700 hover:bg-indigo-50"
             @click="ctxOpenWhere(ctxMenu.node, 'current')"
           >
-            <span>当前标签页打开</span><span class="text-slate-400">⇱</span>
+            <span>{{ t('common.openCurrentTab') }}</span><span class="text-slate-400">⇱</span>
           </button>
           <button
             v-if="ctxMenu.node.url && settings?.preferences.bookmarkOpenMode === 'currentTab'"
             class="w-full flex items-center justify-between px-3 py-1.5 text-xs text-slate-700 hover:bg-indigo-50"
             @click="ctxOpenWhere(ctxMenu.node, 'newTab')"
           >
-            <span>新标签页打开</span><span class="text-slate-400">↗</span>
+            <span>{{ t('common.openNewTab') }}</span><span class="text-slate-400">↗</span>
           </button>
           <button
             v-if="ctxMenu.node.url"
             class="w-full flex items-center justify-between px-3 py-1.5 text-xs text-slate-700 hover:bg-indigo-50"
             @click="ctxOpenWhere(ctxMenu.node, 'window')"
           >
-            <span>新窗口打开</span><span class="text-slate-400">❐</span>
+            <span>{{ t('common.openNewWindow') }}</span><span class="text-slate-400">❐</span>
           </button>
           <button
             v-if="ctxMenu.node.url"
             class="w-full flex items-center justify-between px-3 py-1.5 text-xs text-slate-700 hover:bg-indigo-50"
             @click="ctxOpenWhere(ctxMenu.node, 'incognito')"
           >
-            <span>无痕窗口打开</span><span class="text-slate-400">🕶</span>
+            <span>{{ t('common.openIncognito') }}</span><span class="text-slate-400">🕶</span>
           </button>
           <button
             v-if="ctxMenu.node.url"
             class="w-full flex items-center justify-between px-3 py-1.5 text-xs text-slate-700 hover:bg-indigo-50"
             @click="ctxCopyLink(ctxMenu.node)"
           >
-            <span>复制链接</span><span class="text-slate-400">⧉</span>
+            <span>{{ t('common.copyLink') }}</span><span class="text-slate-400">⧉</span>
           </button>
           <button
             v-if="!ctxMenu.node.url"
             class="w-full flex items-center justify-between px-3 py-1.5 text-xs text-slate-700 hover:bg-indigo-50"
             @click="ctxCreateFolder(ctxMenu.node)"
           >
-            <span>新建子文件夹</span><span class="text-slate-400">＋</span>
+            <span>{{ t('common.newSubfolder') }}</span><span class="text-slate-400">＋</span>
           </button>
           <button
             v-if="!ctxMenu.node.url"
             class="w-full flex items-center justify-between px-3 py-1.5 text-xs text-slate-700 hover:bg-indigo-50"
             @click="ctxCreateBookmark(ctxMenu.node)"
           >
-            <span>新建书签</span><span class="text-slate-400">🔖</span>
+            <span>{{ t('common.newBookmark') }}</span><span class="text-slate-400">🔖</span>
           </button>
           <button
             v-if="!ctxMenu.node.url"
             class="w-full flex items-center justify-between px-3 py-1.5 text-xs text-slate-700 hover:bg-indigo-50"
             @click="ctxToggle(ctxMenu.node)"
           >
-            <span>{{ treeExpanded.has(ctxMenu.node.id) ? '收起' : '展开' }}</span>
+            <span>{{ treeExpanded.has(ctxMenu.node.id) ? t('popup.collapse') : t('popup.expand') }}</span>
             <span class="text-slate-400">{{ treeExpanded.has(ctxMenu.node.id) ? '▲' : '▼' }}</span>
           </button>
           <button
             class="w-full flex items-center justify-between px-3 py-1.5 text-xs text-slate-700 hover:bg-indigo-50"
             @click="ctxOpenManager"
           >
-            <span>在管理页中查看</span><span class="text-slate-400">⇥</span>
+            <span>{{ t('popup.viewInManagerPage') }}</span><span class="text-slate-400">⇥</span>
           </button>
           <div class="my-1 border-t border-slate-100"></div>
           <button
             class="w-full flex items-center justify-between px-3 py-1.5 text-xs text-red-500 hover:bg-red-50"
             @click="ctxDelete(ctxMenu.node)"
           >
-            <span>删除</span><span>🗑</span>
+            <span>{{ t('common.delete') }}</span><span>🗑</span>
           </button>
         </div>
       </div>
@@ -1140,19 +1142,19 @@ onMounted(async () => {
       @click.self="newFolderForm = null"
     >
       <div class="w-full max-w-xs rounded-xl bg-white p-4 shadow-xl space-y-3">
-        <p class="text-sm font-medium">新建子文件夹</p>
-        <p class="text-[11px] text-slate-400">位置：{{ newFolderForm.node.title }}</p>
+        <p class="text-sm font-medium">{{ t('common.newSubfolder') }}</p>
+        <p class="text-[11px] text-slate-400">{{ t('common.locationAt', { path: newFolderForm.node.title }) }}</p>
         <p v-if="createError" class="px-2.5 py-1.5 rounded-lg bg-red-50 text-red-600 text-xs">{{ createError }}</p>
         <input
           v-model="newFolderForm.name"
           autofocus
-          placeholder="文件夹名称"
+          :placeholder="t('common.folderNamePlaceholder')"
           class="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:border-indigo-400"
           @keydown.enter="confirmCreateFolder"
         />
         <div class="flex justify-end gap-2">
-          <button class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600" @click="newFolderForm = null">取消</button>
-          <button class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700" @click="confirmCreateFolder">创建</button>
+          <button class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600" @click="newFolderForm = null">{{ t('common.cancel') }}</button>
+          <button class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700" @click="confirmCreateFolder">{{ t('common.create') }}</button>
         </div>
       </div>
     </div>
@@ -1164,19 +1166,19 @@ onMounted(async () => {
       @click.self="renameFolderForm = null"
     >
       <div class="w-full max-w-xs rounded-xl bg-white p-4 shadow-xl space-y-3">
-        <p class="text-sm font-medium">重命名文件夹</p>
-        <p class="text-[11px] text-slate-400">位置：{{ nodeFolderPath(renameFolderForm.node) }}</p>
+        <p class="text-sm font-medium">{{ t('popup.renameFolderTitle') }}</p>
+        <p class="text-[11px] text-slate-400">{{ t('common.locationAt', { path: nodeFolderPath(renameFolderForm.node) }) }}</p>
         <p v-if="createError" class="px-2.5 py-1.5 rounded-lg bg-red-50 text-red-600 text-xs">{{ createError }}</p>
         <input
           v-model="renameFolderForm.name"
           autofocus
-          placeholder="文件夹名称"
+          :placeholder="t('common.folderNamePlaceholder')"
           class="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:border-indigo-400"
           @keydown.enter="confirmRenameFolder"
         />
         <div class="flex justify-end gap-2">
-          <button class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600" @click="renameFolderForm = null">取消</button>
-          <button class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700" @click="confirmRenameFolder">保存</button>
+          <button class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600" @click="renameFolderForm = null">{{ t('common.cancel') }}</button>
+          <button class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700" @click="confirmRenameFolder">{{ t('common.save') }}</button>
         </div>
       </div>
     </div>
@@ -1188,13 +1190,13 @@ onMounted(async () => {
       @click.self="newBookmarkForm = null"
     >
       <div class="w-full max-w-xs rounded-xl bg-white p-4 shadow-xl space-y-3">
-        <p class="text-sm font-medium">新建书签</p>
-        <p class="text-[11px] text-slate-400">位置：{{ nodeFolderPath(newBookmarkForm.node) }}</p>
+        <p class="text-sm font-medium">{{ t('common.newBookmark') }}</p>
+        <p class="text-[11px] text-slate-400">{{ t('common.locationAt', { path: nodeFolderPath(newBookmarkForm.node) }) }}</p>
         <p v-if="createError" class="px-2.5 py-1.5 rounded-lg bg-red-50 text-red-600 text-xs">{{ createError }}</p>
         <input
           v-model="newBookmarkForm.title"
           autofocus
-          placeholder="标题"
+          :placeholder="t('common.title')"
           class="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:border-indigo-400"
         />
         <input
@@ -1204,8 +1206,8 @@ onMounted(async () => {
           @keydown.enter="confirmCreateBookmark"
         />
         <div class="flex justify-end gap-2">
-          <button class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600" @click="newBookmarkForm = null">取消</button>
-          <button class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700" @click="confirmCreateBookmark">创建</button>
+          <button class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600" @click="newBookmarkForm = null">{{ t('common.cancel') }}</button>
+          <button class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700" @click="confirmCreateBookmark">{{ t('common.create') }}</button>
         </div>
       </div>
     </div>
@@ -1218,25 +1220,27 @@ onMounted(async () => {
     >
       <div class="w-full max-w-xs rounded-xl bg-white p-4 shadow-xl space-y-3">
         <p class="text-sm font-medium">
-          {{ confirmDelete.node.url ? '删除书签' : '删除文件夹' }}
+          {{ confirmDelete.node.url ? t('common.deleteBookmarkTitle') : t('common.deleteFolderTitle') }}
         </p>
         <p class="text-xs text-slate-600 leading-relaxed break-words">
-          确定删除「{{ confirmDelete.node.title || hostOf(confirmDelete.node.url ?? '') }}」{{
-            confirmDelete.node.url ? '' : `及其全部内容（${countDescendants(confirmDelete.node)} 项）`
-          }}？此操作不可撤销。
+          {{
+            confirmDelete.node.url
+              ? t('common.confirmDeleteBookmark', { name: confirmDelete.node.title || hostOf(confirmDelete.node.url ?? '') })
+              : t('popup.confirmDeleteFolder', { name: confirmDelete.node.title, n: countDescendants(confirmDelete.node) })
+          }}
         </p>
         <div class="flex justify-end gap-2">
           <button
             class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50"
             @click="confirmDelete = null"
           >
-            取消
+            {{ t('common.cancel') }}
           </button>
           <button
             class="px-3 py-1.5 rounded-lg bg-red-500 text-white text-xs font-medium hover:bg-red-600"
             @click="confirmDeleteAction"
           >
-            确认删除
+            {{ t('common.confirmDeleteBtn') }}
           </button>
         </div>
       </div>

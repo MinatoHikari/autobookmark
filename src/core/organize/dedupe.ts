@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { rt } from '../../shared/i18n';
 import type { OrganizeJob, ReviewGroup } from '../../shared/types';
 import type { FlatBookmark } from './scan';
 import type { Settings } from '../storage/settings';
@@ -187,10 +188,10 @@ export async function scanDuplicates(
   job.result = {
     groups: confirmed,
     report: [
-      `扫描 ${all.length} 条书签`,
-      `精确重复 ${exactGroups.length} 组`,
+      rt('organize.reportScanned', { n: all.length }),
+      rt('organize.reportExactGroups', { n: exactGroups.length }),
       ...(aiChecked
-        ? [`语义候选 ${aiChecked} 组，AI 确认 ${aiConfirmedCount} 组`]
+        ? [rt('organize.reportSemanticGroups', { n: aiChecked, m: aiConfirmedCount })]
         : []),
     ],
   };

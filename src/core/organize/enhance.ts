@@ -1,5 +1,6 @@
 import { browser } from 'wxt/browser';
 import { z } from 'zod';
+import { rt } from '../../shared/i18n';
 import type { BookmarkMeta, OrganizeJob } from '../../shared/types';
 import type { Settings } from '../storage/settings';
 import { getMeta, hashUrl, putMeta } from '../storage/db';
@@ -134,7 +135,7 @@ export async function enhanceSingle(
   bookmarkId: string,
 ): Promise<BookmarkMeta> {
   const node = (await browser.bookmarks.get(bookmarkId).catch(() => []))[0];
-  if (!node?.url) throw new Error('书签不存在或不是网页');
+  if (!node?.url) throw new Error(rt('err.bookmarkNotFound'));
   const existing = await getMeta(bookmarkId);
 
   const page = {

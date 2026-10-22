@@ -11,10 +11,12 @@ import OrganizePanel from './components/OrganizePanel.vue';
 import MetaEditDialog from '../../components/MetaEditDialog.vue';
 import AgentChat from './components/AgentChat.vue';
 import SettingsContent from '../../components/SettingsContent.vue';
-import { formatTime, openInCurrentTab, openInWindow } from '../../shared/ui';
+import { formatTime, openInCurrentTab, openInNewTab, openInWindow, backgroundOpen } from '../../shared/ui';
+import { useI18n } from '../../shared/i18n';
 import FaviconImg from '../../components/FaviconImg.vue';
 import type { Settings } from '../../core/storage/settings';
 
+const t = useI18n();
 const tree = ref<TreeNodeDto[]>([]);
 const treeAside = ref<HTMLElement | null>(null);
 
@@ -145,7 +147,7 @@ async function confirmFolderForm() {
   const name = form?.name.trim();
   if (!form) return;
   if (!name) {
-    folderFormError.value = '名称不能为空';
+    folderFormError.value = t('manager.errorNameRequired');
     return;
   }
   try {
@@ -182,12 +184,12 @@ async function onTreeDrop({ targetId, zone, draggedId }: TreeDropEvent) {
   if (!target) return;
   const res = resolveDropTarget(tree.value, draggedId, target, zone);
   if (!res.ok) {
-    if (res.reason === 'invalid') noticeMsg.value = '不能移动到该位置（自身、子文件夹或系统根文件夹）';
+    if (res.reason === 'invalid') noticeMsg.value = t('manager.toastInvalidDrop');
     return;
   }
   const ok = await sendMessage('moveNode', { id: draggedId, newParentId: res.parentId, index: res.index });
   if (!ok) {
-    noticeMsg.value = '移动失败（可能是系统文件夹或非法目标）';
+    noticeMsg.value = t('common.toastMoveFailed');
     return;
   }
   if (zone === 'into') expandTo(target.id);
@@ -235,15 +237,15 @@ function findParent(nodes: TreeNodeDto[], childId: string): TreeNodeDto | null {
   return null;
 }
 
-async function openUrl(url: string) {
-  await browser.tabs.create({ url });
+async function openUrl(url: string, e?: MouseEvent) {
+  await openInNewTab(url, backgroundOpen(managerSettings.value?.preferences.openNewTabInBackground, e));
 }
 
 // ---- 树右键菜单 ----
 const ctxMenu = ref<{ node: TreeNodeDto; x: number; y: number } | null>(null);
 const managerSettings = ref<Settings | null>(null);
 const openModeLabel = computed(() =>
-  managerSettings.value?.preferences.bookmarkOpenMode === 'currentTab' ? '新标签页打开' : '当前标签页打开',
+  managerSettings.value?.preferences.bookmarkOpenMode === 'currentTab' ? t('common.openNewTab') : t('common.openCurrentTab'),
 );
 
 async function ctxOpenWhere(node: TreeNodeDto, where: 'current' | 'newTab' | 'window' | 'incognito') {
@@ -292,11 +294,11 @@ async function confirmCreateBookmark() {
   const title = form?.title.trim();
   const url = form?.url.trim();
   if (!form || !title) {
-    createBookmarkError.value = '标题不能为空';
+    createBookmarkError.value = t('common.errorTitleRequired');
     return;
   }
   if (!url || !/^https?:\/\//i.test(url)) {
-    createBookmarkError.value = '链接必须以 http:// 或 https:// 开头';
+    createBookmarkError.value = t('common.errorUrlProtocol');
     return;
   }
   try {
@@ -330,7 +332,7 @@ async function ctxEnhance(node: TreeNodeDto) {
   }
   const ids = flattenBookmarks([node], []).map((b) => b.id);
   if (!ids.length) {
-    showToast('文件夹里没有可增强的书签');
+    showToast(t('common.folderEmptyToast'));
     return;
   }
   try {
@@ -359,13 +361,13 @@ async function ctxReclassify(node: TreeNodeDto) {
     try {
       const r = await sendMessage('reclassifyBookmark', node.id);
       if (!r.ok) {
-        showToast(r.reason === 'no-candidates' ? '没有可用的目标目录' : 'AI 未能确定目标目录');
+        showToast(r.reason === 'no-candidates' ? t('common.toastNoCandidates') : t('common.toastNoFolderDecided'));
         return;
       }
       await refreshTree();
-      showToast(`已移动到「${r.folder}」`);
+      showToast(t('common.toastMovedTo', { folder: r.folder ?? '' }));
     } catch (e) {
-      showToast(`分类失败：${(e as Error).message}`);
+      showToast(t('common.toastClassifyFailed', { msg: (e as Error).message }));
       return;
     } finally {
       classifying.value = null;
@@ -435,10 +437,10 @@ onMounted(async () => {
     <!-- 顶栏 -->
     <header class="flex items-center gap-2.5 px-4 py-2.5 bg-white border-b border-slate-200">
       <div class="w-6 h-6 rounded-md bg-indigo-600 text-white grid place-items-center text-xs font-bold">A</div>
-      <span class="font-semibold text-sm">AutoBookmark 书签管理</span>
+      <span class="font-semibold text-sm">{{ t('manager.title') }}</span>
       <span
         class="px-1.5 py-0.5 rounded bg-slate-100 text-[10px] text-slate-400 font-mono"
-        :title="`扩展版本（当前加载：${extVersion}）`"
+        :title="t('manager.versionTip', { v: extVersion })"
       >
         v{{ extVersion }}
       </span>
@@ -450,21 +452,21 @@ onMounted(async () => {
           :class="view === 'bookmarks' ? 'bg-white shadow-sm font-medium text-indigo-700' : 'text-slate-500 hover:text-slate-700'"
           @click="view = 'bookmarks'"
         >
-          🔖 书签
+          {{ t('manager.tabBookmarks') }}
         </button>
         <button
           class="px-3.5 py-1 rounded-lg text-xs transition-colors"
           :class="view === 'settings' ? 'bg-white shadow-sm font-medium text-indigo-700' : 'text-slate-500 hover:text-slate-700'"
           @click="view = 'settings'"
         >
-          ⚙ 设置
+          {{ t('manager.tabSettings') }}
         </button>
         <button
           class="px-3.5 py-1 rounded-lg text-xs transition-colors"
           :class="view === 'agent' ? 'bg-white shadow-sm font-medium text-indigo-700' : 'text-slate-500 hover:text-slate-700'"
           @click="view = 'agent'"
         >
-          🤖 助手
+          {{ t('manager.tabAgent') }}
         </button>
       </nav>
 
@@ -474,7 +476,7 @@ onMounted(async () => {
           <input
             v-model="searchQuery"
             @input="onSearchInput"
-            placeholder="搜索全部书签（标题 / 摘要 / 标签）…"
+            :placeholder="t('manager.searchPlaceholder')"
             class="w-full px-3.5 py-1.5 rounded-lg bg-slate-100 text-sm focus:outline-none focus:bg-white focus:ring-2 focus:ring-indigo-200"
           />
           <span v-if="searching" class="absolute right-3 top-2 text-xs text-slate-400 animate-pulse">…</span>
@@ -483,13 +485,13 @@ onMounted(async () => {
           class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700"
           @click="showOrganize = true"
         >
-          ✨ 整理
+          {{ t('manager.organizeBtn') }}
         </button>
         <button
           class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50"
           @click="refreshTree()"
         >
-          刷新
+          {{ t('manager.refreshBtn') }}
         </button>
       </template>
       <span v-else class="flex-1"></span>
@@ -512,7 +514,7 @@ onMounted(async () => {
           :selected-id="selectedId"
           :expanded="expanded"
           @select="selectFolder"
-          @open-bookmark="openUrl($event.url ?? '')"
+          @open-bookmark="(node, e) => openUrl(node.url ?? '', e)"
           @context-menu="openCtxMenu"
           @toggle="toggleFolder"
           @create-in="createIn"
@@ -526,7 +528,7 @@ onMounted(async () => {
         <!-- 搜索结果 -->
         <template v-if="searchResults">
           <h2 class="text-xs font-semibold text-slate-500 mb-3">
-            搜索「{{ searchQuery }}」 · {{ searchResults.length }} 条结果
+            {{ t('manager.searchResultsCount', { q: searchQuery, n: searchResults.length }) }}
           </h2>
           <div class="max-w-3xl space-y-2">
             <div
@@ -535,12 +537,12 @@ onMounted(async () => {
               class="group flex items-start gap-2.5 rounded-xl bg-white border border-slate-200 p-3 hover:border-indigo-200"
             >
               <FaviconImg :url="item.url" class="w-4 h-4 mt-1 rounded" loading="lazy" />
-              <div class="min-w-0 flex-1 cursor-pointer" @click="openUrl(item.url)">
+              <div class="min-w-0 flex-1 cursor-pointer" @click="openUrl(item.url, $event)">
                 <h3 class="text-sm font-medium leading-snug break-words group-hover:text-indigo-700">{{ item.title }}</h3>
                 <p class="mt-1 text-xs text-slate-600 leading-relaxed line-clamp-2">{{ item.summary }}</p>
                 <p class="mt-1.5 text-[11px] text-slate-400">
                   {{ item.folderPath || '·' }} · {{ formatTime(item.createdAt) }}
-                  <span v-if="item.matchedBy === 'semantic'" class="ml-1 text-emerald-500">语义</span>
+                  <span v-if="item.matchedBy === 'semantic'" class="ml-1 text-emerald-500">{{ t('manager.semanticBadge') }}</span>
                 </p>
                 <div v-if="item.tags.length" class="mt-1.5 flex flex-wrap gap-1">
                   <span v-for="tag in item.tags" :key="tag" class="px-1.5 py-0.5 rounded text-[10px] bg-indigo-50 text-indigo-600">
@@ -552,10 +554,10 @@ onMounted(async () => {
                 class="shrink-0 px-2 py-1 rounded text-[11px] text-indigo-500 hover:bg-indigo-50 opacity-0 group-hover:opacity-100"
                 @click="locate(item)"
               >
-                定位 ↗
+                {{ t('manager.locateBtn') }}
               </button>
             </div>
-            <div v-if="!searchResults.length" class="py-16 text-center text-sm text-slate-400">没有匹配的书签</div>
+            <div v-if="!searchResults.length" class="py-16 text-center text-sm text-slate-400">{{ t('common.noResults') }}</div>
           </div>
         </template>
 
@@ -565,8 +567,7 @@ onMounted(async () => {
             <div class="flex items-center gap-2 mb-3">
               <h2 class="text-sm font-semibold">{{ selectedNode?.title ?? '…' }}</h2>
               <span class="text-[11px] text-slate-400">
-                {{ selectedNode?.children.filter((c) => c.url).length ?? 0 }} 条书签 ·
-                {{ unenhancedIds.length }} 条待增强
+                {{ t('manager.folderStats', { n: selectedNode?.children.filter((c) => c.url).length ?? 0, m: unenhancedIds.length }) }}
               </span>
             </div>
             <BookmarkList
@@ -609,67 +610,67 @@ onMounted(async () => {
           class="w-full text-left px-3 py-1.5 text-indigo-600 hover:bg-indigo-50 font-medium"
           @click="menuAction('enhance')"
         >
-          ✨ AI 增强
+          {{ t('common.ctxEnhance') }}
         </button>
         <button
           class="w-full text-left px-3 py-1.5 text-indigo-600 hover:bg-indigo-50 font-medium"
           @click="menuAction('reclassify')"
         >
-          🗂 智能重新分类
+          {{ t('common.ctxReclassify') }}
         </button>
         <button
           v-if="ctxMenu.node.url && managerSettings?.preferences.bookmarkOpenMode === 'newTab'"
           class="w-full text-left px-3 py-1.5 hover:bg-indigo-50 hover:text-indigo-700"
           @click="ctxOpenWhere(ctxMenu.node, 'current')"
         >
-          当前标签页打开
+          {{ t('common.openCurrentTab') }}
         </button>
         <button
           v-if="ctxMenu.node.url && managerSettings?.preferences.bookmarkOpenMode === 'currentTab'"
           class="w-full text-left px-3 py-1.5 hover:bg-indigo-50 hover:text-indigo-700"
           @click="ctxOpenWhere(ctxMenu.node, 'newTab')"
         >
-          新标签页打开
+          {{ t('common.openNewTab') }}
         </button>
         <button
           v-if="ctxMenu.node.url"
           class="w-full text-left px-3 py-1.5 hover:bg-indigo-50 hover:text-indigo-700"
           @click="ctxOpenWhere(ctxMenu.node, 'window')"
         >
-          新窗口打开
+          {{ t('common.openNewWindow') }}
         </button>
         <button
           v-if="ctxMenu.node.url"
           class="w-full text-left px-3 py-1.5 hover:bg-indigo-50 hover:text-indigo-700"
           @click="ctxOpenWhere(ctxMenu.node, 'incognito')"
         >
-          无痕窗口打开
+          {{ t('common.openIncognito') }}
         </button>
         <button
           class="w-full text-left px-3 py-1.5 hover:bg-indigo-50 hover:text-indigo-700"
           @click="menuAction('edit')"
         >
-          ✎ {{ ctxMenu.node.url ? '编辑' : '重命名' }}
+          ✎ {{ ctxMenu.node.url ? t('common.edit') : t('common.rename') }}
         </button>
         <button
           v-if="!ctxMenu.node.url"
           class="w-full text-left px-3 py-1.5 hover:bg-indigo-50 hover:text-indigo-700"
           @click="menuAction('createIn')"
         >
-          ＋ 新建子文件夹
+          ＋ {{ t('common.newSubfolder') }}
         </button>
         <button
           v-if="!ctxMenu.node.url"
           class="w-full text-left px-3 py-1.5 hover:bg-indigo-50 hover:text-indigo-700"
           @click="openCreateBookmark(ctxMenu.node)"
         >
-          🔖 新建书签
+          🔖 {{ t('common.newBookmark') }}
         </button>
         <button
           class="w-full text-left px-3 py-1.5 text-red-500 hover:bg-red-50"
           @click="menuAction('delete')"
         >
-          🗑 删除
+          🗑 {{ t('common.delete') }}
         </button>
       </div>
     </div>
@@ -687,7 +688,7 @@ onMounted(async () => {
       class="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-indigo-600 text-white text-xs shadow-lg"
     >
       <span class="typing-dots"><span>●</span><span>●</span><span>●</span></span>
-      AI 正在分类「{{ classifying.title }}」…
+      {{ t('manager.classifying', { title: classifying.title }) }}
     </div>
 
     <!-- 轻提示 -->
@@ -705,13 +706,13 @@ onMounted(async () => {
       @click.self="createBookmarkState = null"
     >
       <div class="w-full max-w-sm rounded-xl bg-white p-5 shadow-xl space-y-3">
-        <p class="text-sm font-medium">新建书签</p>
-        <p class="text-[11px] text-slate-400">位置：{{ nodeFolderPath(createBookmarkState.node) }}</p>
+        <p class="text-sm font-medium">{{ t('common.newBookmark') }}</p>
+        <p class="text-[11px] text-slate-400">{{ t('common.locationAt', { path: nodeFolderPath(createBookmarkState.node) }) }}</p>
         <p v-if="createBookmarkError" class="px-2.5 py-1.5 rounded-lg bg-red-50 text-red-600 text-xs">{{ createBookmarkError }}</p>
         <input
           v-model="createBookmarkState.title"
           autofocus
-          placeholder="标题"
+          :placeholder="t('common.title')"
           class="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:border-indigo-400"
         />
         <input
@@ -721,8 +722,8 @@ onMounted(async () => {
           @keydown.enter="confirmCreateBookmark"
         />
         <div class="flex justify-end gap-2">
-          <button class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50" @click="createBookmarkState = null">取消</button>
-          <button class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700" @click="confirmCreateBookmark">创建</button>
+          <button class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50" @click="createBookmarkState = null">{{ t('common.cancel') }}</button>
+          <button class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700" @click="confirmCreateBookmark">{{ t('common.create') }}</button>
         </div>
       </div>
     </div>
@@ -734,20 +735,20 @@ onMounted(async () => {
       @click.self="folderForm = null"
     >
       <div class="w-full max-w-xs rounded-xl bg-white p-4 shadow-xl space-y-3">
-        <p class="text-sm font-medium">{{ folderForm.mode === 'create' ? '新建子文件夹' : '重命名' }}</p>
-        <p class="text-[11px] text-slate-400">位置：{{ nodeFolderPath(folderForm.node) }}</p>
+        <p class="text-sm font-medium">{{ folderForm.mode === 'create' ? t('common.newSubfolder') : t('common.rename') }}</p>
+        <p class="text-[11px] text-slate-400">{{ t('common.locationAt', { path: nodeFolderPath(folderForm.node) }) }}</p>
         <p v-if="folderFormError" class="px-2.5 py-1.5 rounded-lg bg-red-50 text-red-600 text-xs">{{ folderFormError }}</p>
         <input
           v-model="folderForm.name"
           autofocus
-          placeholder="文件夹名称"
+          :placeholder="t('common.folderNamePlaceholder')"
           class="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:border-indigo-400"
           @keydown.enter="confirmFolderForm"
         />
         <div class="flex justify-end gap-2">
-          <button class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50" @click="folderForm = null">取消</button>
+          <button class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50" @click="folderForm = null">{{ t('common.cancel') }}</button>
           <button class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700" @click="confirmFolderForm">
-            {{ folderForm.mode === 'create' ? '创建' : '保存' }}
+            {{ folderForm.mode === 'create' ? t('common.create') : t('common.save') }}
           </button>
         </div>
       </div>
@@ -760,15 +761,17 @@ onMounted(async () => {
       @click.self="confirmRemoveNode = null"
     >
       <div class="w-full max-w-xs rounded-xl bg-white p-4 shadow-xl space-y-3">
-        <p class="text-sm font-medium">{{ confirmRemoveNode.url ? '删除书签' : '删除文件夹' }}</p>
+        <p class="text-sm font-medium">{{ confirmRemoveNode.url ? t('common.deleteBookmarkTitle') : t('common.deleteFolderTitle') }}</p>
         <p class="text-xs text-slate-600 leading-relaxed break-words">
-          确定删除「{{ confirmRemoveNode.title }}」{{
-            confirmRemoveNode.url ? '' : '及其全部内容'
-          }}？
+          {{
+            confirmRemoveNode.url
+              ? t('common.confirmDeleteBookmark', { name: confirmRemoveNode.title })
+              : t('common.confirmDeleteFolderAll', { name: confirmRemoveNode.title })
+          }}
         </p>
         <div class="flex justify-end gap-2">
-          <button class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50" @click="confirmRemoveNode = null">取消</button>
-          <button class="px-3 py-1.5 rounded-lg bg-red-500 text-white text-xs font-medium hover:bg-red-600" @click="confirmRemoveAction">确认删除</button>
+          <button class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50" @click="confirmRemoveNode = null">{{ t('common.cancel') }}</button>
+          <button class="px-3 py-1.5 rounded-lg bg-red-500 text-white text-xs font-medium hover:bg-red-600" @click="confirmRemoveAction">{{ t('common.confirmDeleteBtn') }}</button>
         </div>
       </div>
     </div>
@@ -782,7 +785,7 @@ onMounted(async () => {
       <div class="w-full max-w-xs rounded-xl bg-white p-4 shadow-xl space-y-3">
         <p class="text-xs text-slate-600 leading-relaxed">{{ noticeMsg }}</p>
         <div class="flex justify-end">
-          <button class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700" @click="noticeMsg = ''">知道了</button>
+          <button class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700" @click="noticeMsg = ''">{{ t('common.gotIt') }}</button>
         </div>
       </div>
     </div>

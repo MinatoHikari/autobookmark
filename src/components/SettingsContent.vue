@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { sendMessage } from '../shared/messages';
+import { useI18n, localeTag, type I18nKey } from '../shared/i18n';
 import type { ProviderPreset } from '../core/providers/presets';
 import {
   AI_TASKS,
-  AI_TASK_LABELS,
   settingsSchema,
   type AiTask,
   type ProviderConfig,
@@ -20,6 +20,7 @@ import type { Usage } from '../shared/types';
 
 type Tab = 'providers' | 'bindings' | 'preferences' | 'usage';
 
+const t = useI18n();
 const tab = ref<Tab>('providers');
 const settings = ref<Settings | null>(null);
 const saving = ref(false);
@@ -73,11 +74,11 @@ function addProvider() {
   const preset = PROVIDER_PRESETS.find((p) => p.id === addPresetId.value);
   if (!settings.value) return;
   const provider = preset
-    ? newProviderFromPreset(preset)
+    ? { ...newProviderFromPreset(preset), name: presetName(preset) }
     : {
         id: crypto.randomUUID(),
         presetId: null,
-        name: '自定义供应商',
+        name: t('settings.customProviderName'),
         baseURL: 'https://',
         apiKey: '',
         models: [],
@@ -89,7 +90,7 @@ function addProvider() {
 
 function removeProvider(id: string) {
   if (!settings.value) return;
-  askConfirm('确定删除这个供应商？其任务绑定将一并解除。', () => {
+  askConfirm(t('settings.confirmRemoveProvider'), () => {
     if (!settings.value) return;
     settings.value.providers = settings.value.providers.filter((p) => p.id !== id);
     for (const task of ['enhance', 'tldr', 'embedding'] as AiTask[]) {
@@ -106,7 +107,7 @@ async function testProvider(p: ProviderConfig) {
   testMessage.value[p.id] = '';
   try {
     const granted = await ensureOriginPermission(p.baseURL);
-    if (!granted) throw new Error('未授予该供应商域名的访问权限');
+    if (!granted) throw new Error(t('settings.errorNoOriginPermission'));
 
     const client = createClient(p);
     let models: string[] = [];
@@ -125,7 +126,7 @@ async function testProvider(p: ProviderConfig) {
       p.models = models.filter((m) => !p.embeddingModels.includes(m));
     }
     testing.value[p.id] = 'ok';
-    testMessage.value[p.id] = models.length ? `连接正常，发现 ${models.length} 个模型` : '连接正常';
+    testMessage.value[p.id] = models.length ? t('settings.testOkModels', { n: models.length }) : t('settings.testOk');
     await persist();
   } catch (e) {
     testing.value[p.id] = 'fail';
@@ -137,16 +138,16 @@ async function testProvider(p: ProviderConfig) {
 async function fetchModels(p: ProviderConfig) {
   const granted = await ensureOriginPermission(p.baseURL);
   if (!granted) {
-    testMessage.value[p.id] = '未授予域名权限';
+    testMessage.value[p.id] = t('settings.errorNoOriginPermissionShort');
     return;
   }
   try {
     const models = await createClient(p).listModels();
     p.models = models.filter((m) => !p.embeddingModels.includes(m));
-    testMessage.value[p.id] = `已拉取 ${models.length} 个模型`;
+    testMessage.value[p.id] = t('settings.fetchedModels', { n: models.length });
     await persist();
   } catch (e) {
-    testMessage.value[p.id] = `拉取失败：${(e as Error).message}`;
+    testMessage.value[p.id] = t('settings.fetchFailed', { msg: (e as Error).message });
   }
 }
 
@@ -156,12 +157,36 @@ function providerOf(id: string | null | undefined): ProviderConfig | undefined {
 
 function statusLabel(id: string): string {
   const s = testing.value[id];
-  return s === 'ok' ? '正常' : s === 'fail' ? '失败' : '测试中…';
+  return s === 'ok' ? t('settings.statusOk') : s === 'fail' ? t('settings.statusFail') : t('settings.statusTesting');
 }
 
 function presetOf(id: string | null): ProviderPreset | undefined {
   return PROVIDER_PRESETS.find((x) => x.id === id);
 }
+
+// 预设名跟随界面语言展示与落库（presets.ts 里的 name 是中文兜底，防止词典漏项）
+const PRESET_NAME_KEYS: Record<string, I18nKey> = {
+  zai: 'settings.presetName.zai',
+  'zai-coding': 'settings.presetName.zai-coding',
+  'zai-cn': 'settings.presetName.zai-cn',
+  'zai-cn-coding': 'settings.presetName.zai-cn-coding',
+  deepseek: 'settings.presetName.deepseek',
+  openai: 'settings.presetName.openai',
+  'opencode-zen': 'settings.presetName.opencode-zen',
+  'opencode-go': 'settings.presetName.opencode-go',
+  ollama: 'settings.presetName.ollama',
+};
+function presetName(preset: ProviderPreset): string {
+  const key = PRESET_NAME_KEYS[preset.id];
+  return key ? t(key) : preset.name;
+}
+
+const TASK_LABEL_KEYS: Record<AiTask, I18nKey> = {
+  enhance: 'settings.taskEnhance',
+  tldr: 'settings.taskTldr',
+  embedding: 'settings.taskEmbedding',
+  agent: 'settings.taskAgent',
+};
 
 function onBindingProviderChange(task: AiTask, providerId: string) {
   if (!settings.value) return;
@@ -190,15 +215,15 @@ async function importSettings(event: Event) {
     const next = settingsSchema.parse(JSON.parse(await file.text()));
     settings.value = await sendMessage('saveSettings', next);
     savedFlash.value = true;
-    showNotice('导入成功');
+    showNotice(t('settings.importOk'));
   } catch (e) {
-    showNotice(`导入失败：${(e as Error).message}`);
+    showNotice(t('settings.importFailed', { msg: (e as Error).message }));
   }
   input.value = '';
 }
 
 async function clearUsageStats() {
-  askConfirm('清零所有用量统计？', async () => {
+  askConfirm(t('settings.confirmClearUsage'), async () => {
     await sendMessage('clearUsage');
     usage.value = {};
   });
@@ -217,29 +242,29 @@ onMounted(reload);
 
 <template>
   <div class="space-y-6">
-    <div v-if="!settings" class="p-10 text-center text-slate-400 text-sm">加载中…</div>
+    <div v-if="!settings" class="p-10 text-center text-slate-400 text-sm">{{ t('common.loading') }}</div>
 
     <div v-else class="space-y-6">
       <header class="flex items-center gap-3">
         <div class="w-8 h-8 rounded-lg bg-indigo-600 text-white grid place-items-center font-bold">A</div>
         <div>
-          <h1 class="text-lg font-semibold">AutoBookmark 设置</h1>
-          <p class="text-xs text-slate-400">API Key 仅保存在浏览器本地，不会上传到任何服务器</p>
+          <h1 class="text-lg font-semibold">{{ t('settings.pageTitle') }}</h1>
+          <p class="text-xs text-slate-400">{{ t('settings.privacyNote') }}</p>
         </div>
         <span class="flex-1"></span>
-        <span v-if="savedFlash" class="text-xs text-green-600">已保存 ✓</span>
+        <span v-if="savedFlash" class="text-xs text-green-600">{{ t('settings.savedFlash') }}</span>
       </header>
 
       <!-- Tabs -->
       <nav class="flex gap-1 p-1 rounded-xl bg-slate-100 w-fit">
         <button
-          v-for="t in (['providers', 'bindings', 'preferences', 'usage'] as Tab[])"
-          :key="t"
+          v-for="tabKey in (['providers', 'bindings', 'preferences', 'usage'] as Tab[])"
+          :key="tabKey"
           class="px-4 py-1.5 rounded-lg text-sm transition-colors"
-          :class="tab === t ? 'bg-white shadow-sm font-medium text-indigo-700' : 'text-slate-500 hover:text-slate-700'"
-          @click="tab = t"
+          :class="tab === tabKey ? 'bg-white shadow-sm font-medium text-indigo-700' : 'text-slate-500 hover:text-slate-700'"
+          @click="tab = tabKey"
         >
-          {{ { providers: '供应商', bindings: '任务绑定', preferences: '偏好', usage: '用量' }[t] }}
+          {{ ({ providers: t('settings.tabProviders'), bindings: t('settings.tabBindings'), preferences: t('settings.tabPreferences'), usage: t('settings.tabUsage') })[tabKey] }}
         </button>
       </nav>
 
@@ -250,18 +275,18 @@ onMounted(reload);
             v-model="addPresetId"
             class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm flex-1"
           >
-            <option value="" disabled>添加供应商（选择预置模板）…</option>
+            <option value="" disabled>{{ t('settings.addPresetPlaceholder') }}</option>
             <option v-for="preset in PROVIDER_PRESETS" :key="preset.id" :value="preset.id">
-              {{ preset.name }} — {{ preset.baseURL }}
+              {{ presetName(preset) }} — {{ preset.baseURL }}
             </option>
-            <option value="custom">自定义（任意 OpenAI 兼容接口）</option>
+            <option value="custom">{{ t('settings.customOption') }}</option>
           </select>
           <button
             class="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-40"
             :disabled="!addPresetId"
             @click="addProvider"
           >
-            添加
+            {{ t('settings.addBtn') }}
           </button>
         </div>
 
@@ -291,13 +316,13 @@ onMounted(reload);
               class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50"
               @click="testProvider(p)"
             >
-              测试连接
+              {{ t('settings.testBtn') }}
             </button>
             <button
               class="px-2.5 py-1.5 rounded-lg text-xs text-red-500 hover:bg-red-50"
               @click="removeProvider(p.id)"
             >
-              删除
+              {{ t('common.delete') }}
             </button>
           </div>
 
@@ -306,7 +331,7 @@ onMounted(reload);
           </p>
 
           <label class="block">
-            <span class="text-xs font-medium text-slate-500">Base URL（OpenAI 兼容）</span>
+            <span class="text-xs font-medium text-slate-500">{{ t('settings.baseUrlLabel') }}</span>
             <input
               v-model="p.baseURL"
               placeholder="https://api.z.ai/api/paas/v4"
@@ -315,7 +340,7 @@ onMounted(reload);
           </label>
 
           <label class="block">
-            <span class="text-xs font-medium text-slate-500">API Key</span>
+            <span class="text-xs font-medium text-slate-500">{{ t('settings.apiKeyLabel') }}</span>
             <div class="mt-1 flex gap-2">
               <input
                 :type="showKey[p.id] ? 'text' : 'password'"
@@ -328,14 +353,14 @@ onMounted(reload);
                 class="px-3 rounded-lg border border-slate-200 text-xs text-slate-500 hover:bg-slate-50"
                 @click="showKey[p.id] = !showKey[p.id]"
               >
-                {{ showKey[p.id] ? '隐藏' : '显示' }}
+                {{ showKey[p.id] ? t('settings.hide') : t('settings.show') }}
               </button>
             </div>
           </label>
 
           <div class="grid grid-cols-2 gap-3">
             <label class="block">
-              <span class="text-xs font-medium text-slate-500">对话模型（逗号分隔）</span>
+              <span class="text-xs font-medium text-slate-500">{{ t('settings.modelsLabel') }}</span>
               <textarea
                 :value="p.models.join(', ')"
                 @change="p.models = ($event.target as HTMLTextAreaElement).value.split(/[,，\n]/).map(s => s.trim()).filter(Boolean)"
@@ -344,12 +369,12 @@ onMounted(reload);
               ></textarea>
             </label>
             <label class="block">
-              <span class="text-xs font-medium text-slate-500">Embedding 模型（可选）</span>
+              <span class="text-xs font-medium text-slate-500">{{ t('settings.embeddingModelsLabel') }}</span>
               <textarea
                 :value="p.embeddingModels.join(', ')"
                 @change="p.embeddingModels = ($event.target as HTMLTextAreaElement).value.split(/[,，\n]/).map(s => s.trim()).filter(Boolean)"
                 rows="2"
-                placeholder="如 embedding-3（DeepSeek 无需填）"
+                :placeholder="t('settings.embeddingPlaceholder')"
                 class="mt-1 w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs font-mono resize-none"
               ></textarea>
             </label>
@@ -361,38 +386,38 @@ onMounted(reload);
               target="_blank"
               class="text-xs text-indigo-500 hover:underline"
             >
-              获取 API Key ↗
+              {{ t('settings.getKeyLink') }}
             </a>
             <span v-else class="text-xs text-slate-400"></span>
             <button
               class="text-xs text-slate-500 hover:text-indigo-600"
               @click="fetchModels(p)"
             >
-              从 /models 拉取模型列表
+              {{ t('settings.fetchModelsBtn') }}
             </button>
           </div>
         </div>
 
         <div v-if="!settings.providers.length" class="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-400">
-          还没有供应商，从上方选择一个预置模板开始
+          {{ t('settings.noProviders') }}
         </div>
 
         <!-- 配置备份 -->
         <div class="rounded-xl bg-white border border-slate-200 p-4 flex items-center gap-3">
           <div class="flex-1">
-            <p class="text-xs font-medium">配置备份</p>
+            <p class="text-xs font-medium">{{ t('settings.configBackupTitle') }}</p>
             <p class="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
-              导出含 API Key 的完整配置 JSON；重装 / 换浏览器 / 换电脑时导入即可恢复
+              {{ t('settings.configBackupDesc') }}
             </p>
           </div>
           <button
             class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50"
             @click="exportSettings"
           >
-            导出配置
+            {{ t('settings.exportBtn') }}
           </button>
           <label class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50 cursor-pointer">
-            导入配置
+            {{ t('settings.importBtn') }}
             <input type="file" accept="application/json,.json" class="hidden" @change="importSettings" />
           </label>
         </div>
@@ -403,7 +428,7 @@ onMounted(reload);
             :disabled="saving"
             @click="persist"
           >
-            {{ saving ? '保存中…' : '保存设置' }}
+            {{ saving ? t('common.saving') : t('settings.saveBtn') }}
           </button>
         </div>
       </section>
@@ -411,22 +436,21 @@ onMounted(reload);
       <!-- 任务绑定 -->
       <section v-else-if="tab === 'bindings'" class="space-y-4">
         <p class="text-xs text-slate-500 bg-indigo-50 text-indigo-700 rounded-lg px-3 py-2 leading-relaxed">
-          每个功能可以绑定不同的供应商/模型：例如摘要用便宜的 GLM-4.5-Air，整理用更强的 GLM-4.6。语义索引需供应商提供
-          /embeddings 接口（DeepSeek 不提供，可留空，搜索将退化为关键词模式）。
+          {{ t('settings.bindingsIntro') }}
         </p>
         <div
           v-for="task in (AI_TASKS as readonly AiTask[])"
           :key="task"
           class="rounded-xl bg-white border border-slate-200 p-4 space-y-2.5"
         >
-          <p class="text-sm font-medium">{{ AI_TASK_LABELS[task] }}</p>
+          <p class="text-sm font-medium">{{ t(TASK_LABEL_KEYS[task]) }}</p>
           <div class="flex gap-2">
             <select
               :value="settings.bindings[task]?.providerId ?? ''"
               class="flex-1 px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm bg-white"
               @change="onBindingProviderChange(task, ($event.target as HTMLSelectElement).value)"
             >
-              <option value="">未配置</option>
+              <option value="">{{ t('settings.unbound') }}</option>
               <option v-for="p in settings.providers" :key="p.id" :value="p.id">{{ p.name }}</option>
             </select>
             <select
@@ -446,7 +470,7 @@ onMounted(reload);
             :disabled="saving"
             @click="persist"
           >
-            {{ saving ? '保存中…' : '保存设置' }}
+            {{ saving ? t('common.saving') : t('settings.saveBtn') }}
           </button>
         </div>
       </section>
@@ -455,26 +479,39 @@ onMounted(reload);
       <section v-else-if="tab === 'preferences'" class="rounded-xl bg-white border border-slate-200 p-4 space-y-4">
         <div class="grid grid-cols-2 gap-4">
           <label class="block">
-            <span class="text-xs font-medium text-slate-500">收藏根文件夹（挂在"其他书签"下）</span>
+            <span class="text-xs font-medium text-slate-500">{{ t('settings.rootFolderLabel') }}</span>
             <input v-model="settings.preferences.rootFolder" class="mt-1 w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm" />
           </label>
           <label class="block">
-            <span class="text-xs font-medium text-slate-500">摘要/标签语言</span>
+            <span class="text-xs font-medium text-slate-500">{{ t('settings.aiLanguageLabel') }}</span>
             <select v-model="settings.preferences.language" class="mt-1 w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm bg-white">
-              <option value="zh">中文</option>
-              <option value="en">English</option>
+              <option value="zh">{{ t('settings.langZh') }}</option>
+              <option value="ja">{{ t('settings.langJa') }}</option>
+              <option value="en">{{ t('settings.langEn') }}</option>
+            </select>
+          </label>
+          <label class="block">
+            <span class="text-xs font-medium text-slate-500">{{ t('settings.uiLanguage') }}</span>
+            <select v-model="settings.preferences.uiLanguage" class="mt-1 w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm bg-white">
+              <option value="zh">{{ t('settings.langZh') }}</option>
+              <option value="ja">{{ t('settings.langJa') }}</option>
+              <option value="en">{{ t('settings.langEn') }}</option>
             </select>
           </label>
         </div>
         <label class="block">
-          <span class="text-xs font-medium text-slate-500">书签打开方式（popup 左键点击）</span>
+          <span class="text-xs font-medium text-slate-500">{{ t('settings.openModeLabel') }}</span>
           <select
             v-model="settings.preferences.bookmarkOpenMode"
             class="mt-1 w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm bg-white"
           >
-            <option value="newTab">在新标签页打开</option>
-            <option value="currentTab">在当前标签页打开</option>
+            <option value="newTab">{{ t('settings.openModeNewTab') }}</option>
+            <option value="currentTab">{{ t('settings.openModeCurrentTab') }}</option>
           </select>
+        </label>
+        <label class="flex items-center gap-2 text-sm">
+          <input type="checkbox" v-model="settings.preferences.openNewTabInBackground" class="accent-indigo-600" />
+          {{ t('settings.backgroundOpenLabel') }}
         </label>
         <div>
           <label class="flex items-center gap-2 text-sm" :class="settings.preferences.saveStrategy === 'existing' && 'opacity-40'">
@@ -484,28 +521,28 @@ onMounted(reload);
               class="accent-indigo-600"
               :disabled="settings.preferences.saveStrategy === 'existing'"
             />
-            使用专门的 AI 收藏文件夹
+            {{ t('settings.autoFolderLabel') }}
           </label>
           <p class="text-[11px] text-slate-400 mt-1 leading-relaxed">
             {{
               settings.preferences.saveStrategy === 'existing'
-                ? '当前为全目录存放策略，此开关不生效'
+                ? t('settings.autoFolderHintExisting')
                 : settings.preferences.autoFolder
-                  ? '收藏统一存入上方目录，并按 AI 建议的子文件夹归类'
-                  : '不勾选时，收藏会在全部已有目录中寻找合适位置（必要时新建）'
+                  ? t('settings.autoFolderHintOn')
+                  : t('settings.autoFolderHintOff')
             }}
           </p>
         </div>
         <label class="flex items-center gap-2 text-sm">
           <input type="checkbox" v-model="settings.preferences.contextMenuEnabled" class="accent-indigo-600" />
-          启用右键菜单"AI 智能收藏此页面"
+          {{ t('settings.contextMenuLabel') }}
         </label>
         <label class="flex items-center gap-2 text-sm">
           <input type="checkbox" v-model="settings.preferences.notifications" class="accent-indigo-600" />
-          整理任务完成 / 失败 / 待确认时发送浏览器通知（点击通知打开书签管理）
+          {{ t('settings.notificationsLabel') }}
         </label>
         <label class="block">
-          <span class="text-xs font-medium text-slate-500">发送给 AI 的正文上限：{{ settings.preferences.maxContentChars }} 字符</span>
+          <span class="text-xs font-medium text-slate-500">{{ t('settings.maxContentLabel', { n: settings.preferences.maxContentChars }) }}</span>
           <input
             type="range"
             min="2000"
@@ -514,7 +551,7 @@ onMounted(reload);
             v-model.number="settings.preferences.maxContentChars"
             class="mt-1 w-full accent-indigo-600"
           />
-          <span class="text-[11px] text-slate-400">越大效果越好，token 消耗越多</span>
+          <span class="text-[11px] text-slate-400">{{ t('settings.maxContentHint') }}</span>
         </label>
         <div class="flex justify-end">
           <button
@@ -522,7 +559,7 @@ onMounted(reload);
             :disabled="saving"
             @click="persist"
           >
-            {{ saving ? '保存中…' : '保存设置' }}
+            {{ saving ? t('common.saving') : t('settings.saveBtn') }}
           </button>
         </div>
       </section>
@@ -530,16 +567,16 @@ onMounted(reload);
       <!-- 用量 -->
       <section v-else class="space-y-3">
         <div v-if="!usageRows.length" class="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-400">
-          还没有 AI 调用记录
+          {{ t('settings.noUsage') }}
         </div>
         <table v-else class="w-full rounded-xl bg-white border border-slate-200 text-sm">
           <thead>
             <tr class="text-left text-xs text-slate-400 border-b border-slate-100">
-              <th class="px-4 py-2.5 font-medium">供应商</th>
-              <th class="px-4 py-2.5 font-medium text-right">调用次数</th>
-              <th class="px-4 py-2.5 font-medium text-right">输入 tokens</th>
-              <th class="px-4 py-2.5 font-medium text-right">输出 tokens</th>
-              <th class="px-4 py-2.5 font-medium text-right">最近使用</th>
+              <th class="px-4 py-2.5 font-medium">{{ t('settings.colProvider') }}</th>
+              <th class="px-4 py-2.5 font-medium text-right">{{ t('settings.colCalls') }}</th>
+              <th class="px-4 py-2.5 font-medium text-right">{{ t('settings.colPromptTokens') }}</th>
+              <th class="px-4 py-2.5 font-medium text-right">{{ t('settings.colCompletionTokens') }}</th>
+              <th class="px-4 py-2.5 font-medium text-right">{{ t('settings.colLastUsed') }}</th>
             </tr>
           </thead>
           <tbody>
@@ -548,13 +585,13 @@ onMounted(reload);
               <td class="px-4 py-2.5 text-right tabular-nums">{{ row.calls }}</td>
               <td class="px-4 py-2.5 text-right tabular-nums text-slate-500">{{ row.promptTokens }}</td>
               <td class="px-4 py-2.5 text-right tabular-nums text-slate-500">{{ row.completionTokens }}</td>
-              <td class="px-4 py-2.5 text-right text-slate-400">{{ row.lastUsedAt ? new Date(row.lastUsedAt).toLocaleString('zh-CN') : '-' }}</td>
+              <td class="px-4 py-2.5 text-right text-slate-400">{{ row.lastUsedAt ? new Date(row.lastUsedAt).toLocaleString(localeTag()) : '-' }}</td>
             </tr>
           </tbody>
         </table>
         <div v-if="usageRows.length" class="flex justify-end">
           <button class="px-4 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-500 hover:bg-slate-50" @click="clearUsageStats">
-            清零统计
+            {{ t('settings.clearUsageBtn') }}
           </button>
         </div>
       </section>
@@ -567,11 +604,11 @@ onMounted(reload);
       @click.self="confirmState = null"
     >
       <div class="w-full max-w-xs rounded-xl bg-white p-4 shadow-xl space-y-3">
-        <p class="text-sm font-medium">确认操作</p>
+        <p class="text-sm font-medium">{{ t('common.confirmTitle') }}</p>
         <p class="text-xs text-slate-600 leading-relaxed">{{ confirmState.text }}</p>
         <div class="flex justify-end gap-2">
-          <button class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50" @click="confirmState = null">取消</button>
-          <button class="px-3 py-1.5 rounded-lg bg-red-500 text-white text-xs font-medium hover:bg-red-600" @click="runConfirm">确认</button>
+          <button class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50" @click="confirmState = null">{{ t('common.cancel') }}</button>
+          <button class="px-3 py-1.5 rounded-lg bg-red-500 text-white text-xs font-medium hover:bg-red-600" @click="runConfirm">{{ t('common.confirm') }}</button>
         </div>
       </div>
     </div>

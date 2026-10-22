@@ -3,6 +3,9 @@ import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { browser } from 'wxt/browser';
 import { sendMessage } from '../../../shared/messages';
 import type { BackupEntry, OrganizeJob } from '../../../shared/types';
+import { useI18n, localeTag, type I18nKey } from '../../../shared/i18n';
+
+const t = useI18n();
 
 const props = defineProps<{ unenhancedIds: string[] }>();
 const emit = defineEmits<{ close: []; changed: [] }>();
@@ -35,23 +38,25 @@ const unenhancedCount = computed(() => props.unenhancedIds.length);
 
 let timer: ReturnType<typeof setInterval> | undefined;
 
-const KIND_LABELS: Record<OrganizeJob['kind'], string> = {
-  enhance: '补全元数据',
-  classify: '自动分类',
-  dedupe: '去重',
-  deadlink: '死链检测',
+const KIND_KEYS: Record<OrganizeJob['kind'], I18nKey> = {
+  enhance: 'organize.kindEnhance',
+  classify: 'organize.kindClassify',
+  dedupe: 'organize.kindDedupe',
+  deadlink: 'organize.kindDeadlink',
 };
+const kindLabel = (kind: OrganizeJob['kind']) => t(KIND_KEYS[kind]);
 
-const STATUS_LABELS: Record<OrganizeJob['status'], string> = {
-  queued: '排队中',
-  running: '进行中',
-  paused: '已暂停',
-  'awaiting-review': '待确认',
-  done: '已完成',
-  undone: '已撤销',
-  cancelled: '已取消',
-  error: '出错',
+const STATUS_KEYS: Record<OrganizeJob['status'], I18nKey> = {
+  queued: 'organize.statusQueued',
+  running: 'organize.statusRunning',
+  paused: 'organize.statusPaused',
+  'awaiting-review': 'organize.statusAwaitingReview',
+  done: 'organize.statusDone',
+  undone: 'organize.statusUndone',
+  cancelled: 'organize.statusCancelled',
+  error: 'organize.statusError',
 };
+const statusLabel = (status: OrganizeJob['status']) => t(STATUS_KEYS[status]);
 
 const activeJob = computed(() => jobs.value.find((j) => j.status === 'queued' || j.status === 'running'));
 const hasUndo = (job: OrganizeJob) => job.undoLog.length > 0 && (job.status === 'done' || job.status === 'error');
@@ -71,7 +76,7 @@ async function refresh() {
 }
 
 async function removeBackup(b: BackupEntry) {
-  askConfirm(`删除备份「${b.label}」？此操作不可恢复。`, async () => {
+  askConfirm(t('organize.confirmDeleteBackup', { label: b.label }), async () => {
     busy.value = true;
     try {
       await sendMessage('deleteBackup', b.id);
@@ -83,15 +88,17 @@ async function removeBackup(b: BackupEntry) {
 }
 
 async function recoverFromMeta() {
-  askConfirm('扫描 AI 元数据，重建 chrome.bookmarks 中已消失的书签？\n（只恢复被 AI 增强过的书签，放到「其他书签/恢复的书签」下）', async () => {
+  askConfirm(t('organize.confirmRecover'), async () => {
     busy.value = true;
     try {
       const { recovered, skipped } = await sendMessage('recoverFromMeta');
       await refresh();
       emit('changed');
       noticeMsg.value = recovered
-        ? `已恢复 ${recovered} 条书签到「其他书签/恢复的书签」`
-        : `没有发现可恢复的书签${skipped ? `（${skipped} 条候选的 URL 已存在，跳过）` : ''}`;
+        ? t('organize.recovered', { n: recovered })
+        : skipped
+          ? t('organize.nothingRecoveredSkipped', { n: skipped })
+          : t('organize.nothingRecovered');
     } catch (e) {
       errorMsg.value = (e as Error).message;
     } finally {
@@ -103,7 +110,7 @@ async function recoverFromMeta() {
 async function backupNow() {
   busy.value = true;
   try {
-    await sendMessage('createBackupNow', `手动备份 ${new Date().toLocaleString('zh-CN')}`);
+    await sendMessage('createBackupNow', t('organize.manualBackupLabel', { time: new Date().toLocaleString(localeTag()) }));
     await refresh();
   } finally {
     busy.value = false;
@@ -125,9 +132,7 @@ function downloadBackup(b: BackupEntry) {
 
 async function restore(b: BackupEntry) {
   askConfirm(
-    `恢复到 ${new Date(b.createdAt).toLocaleString('zh-CN')} 的书签结构？\n` +
-      '当前全部书签将被清空并按快照重建（恢复前会自动再备份一次）。\n' +
-      '注意：AI 摘要/标签等元数据在恢复后会失效。',
+    t('organize.confirmRestore', { time: new Date(b.createdAt).toLocaleString(localeTag()) }),
     async () => {
       busy.value = true;
       try {
@@ -191,7 +196,7 @@ function startDeadlink() {
 
 async function removeJob(job: OrganizeJob) {
   if (job.status === 'awaiting-review') {
-    askConfirm('该任务有待确认的分组，删除后将丢弃这些分组，确定？', () => void doRemoveJob(job));
+    askConfirm(t('organize.confirmRemoveJob'), () => void doRemoveJob(job));
     return;
   }
   await doRemoveJob(job);
@@ -297,10 +302,10 @@ onUnmounted(() => clearInterval(timer));
   <div class="fixed inset-0 z-30 bg-slate-900/40 flex justify-end" @click.self="emit('close')">
     <aside class="w-[520px] max-w-full h-full bg-slate-50 shadow-2xl flex flex-col">
       <header class="flex items-center gap-2 px-5 py-3.5 bg-white border-b border-slate-200">
-        <h2 class="text-sm font-semibold">整理中心</h2>
+        <h2 class="text-sm font-semibold">{{ t('organize.title') }}</h2>
         <span class="flex-1"></span>
         <button class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-500 hover:bg-slate-50" @click="emit('close')">
-          关闭
+          {{ t('common.close') }}
         </button>
       </header>
 
@@ -310,24 +315,24 @@ onUnmounted(() => clearInterval(timer));
         <!-- 备份卡 -->
         <div class="rounded-xl bg-white border border-slate-200 p-3.5 space-y-2.5">
           <div class="flex items-center gap-2">
-            <p class="text-xs font-semibold">📦 书签备份</p>
+            <p class="text-xs font-semibold">{{ t('organize.backupTitle') }}</p>
             <span class="flex-1"></span>
             <button
               class="px-2.5 py-1 rounded-lg border border-slate-200 text-[11px] text-slate-600 hover:bg-slate-50 disabled:opacity-40"
               :disabled="busy"
               @click="backupNow"
             >
-              立即备份
+              {{ t('organize.backupNowBtn') }}
             </button>
           </div>
           <p class="text-[11px] text-slate-400 leading-relaxed">
-            分类/去重/死链任务启动前会自动备份；最多保留 10 份
+            {{ t('organize.backupDesc') }}
           </p>
           <button
             class="text-[11px] text-amber-600 hover:underline"
             @click="recoverFromMeta"
           >
-            🛟 从元数据恢复丢失的书签
+            {{ t('organize.recoverBtn') }}
           </button>
           <div v-if="backups.length" class="space-y-1.5 max-h-40 overflow-y-auto">
             <div
@@ -338,141 +343,141 @@ onUnmounted(() => clearInterval(timer));
               <div class="min-w-0 flex-1">
                 <p class="text-[11px] truncate">{{ b.label }}</p>
                 <p class="text-[10px] text-slate-400">
-                  {{ new Date(b.createdAt).toLocaleString('zh-CN') }} · {{ b.count }} 条
+                  {{ t('organize.backupCount', { time: new Date(b.createdAt).toLocaleString(localeTag()), n: b.count }) }}
                 </p>
               </div>
               <button
                 class="shrink-0 px-2 py-0.5 rounded text-[10px] text-slate-500 hover:bg-white"
-                title="下载 HTML（可在浏览器书签管理器导入）"
+                :title="t('organize.tipDownload')"
                 @click="downloadBackup(b)"
               >
-                下载
+                {{ t('organize.downloadBtn') }}
               </button>
               <button
                 class="shrink-0 px-2 py-0.5 rounded text-[10px] text-red-400 hover:bg-white hover:text-red-600"
-                title="删除此备份"
+                :title="t('organize.tipDeleteBackup')"
                 @click="removeBackup(b)"
               >
-                删除
+                {{ t('common.delete') }}
               </button>
               <button
                 class="shrink-0 px-2 py-0.5 rounded text-[10px] text-red-500 hover:bg-white"
                 @click="restore(b)"
               >
-                恢复
+                {{ t('organize.restoreBtn') }}
               </button>
             </div>
           </div>
-          <p v-else class="text-[11px] text-slate-400">暂无备份</p>
+          <p v-else class="text-[11px] text-slate-400">{{ t('organize.noBackups') }}</p>
         </div>
 
         <!-- 权限卡 -->
         <div class="rounded-xl bg-white border border-slate-200 p-3.5 flex items-center gap-3">
           <div class="flex-1">
-            <p class="text-xs font-medium">网站访问权限</p>
+            <p class="text-xs font-medium">{{ t('organize.accessTitle') }}</p>
             <p class="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
-              死链检测与正文抓取需要；不授权也可用标题+URL 完成增强与分类
+              {{ t('organize.accessDesc') }}
             </p>
           </div>
-          <span v-if="hasAccess" class="text-xs text-green-600">已授权 ✓</span>
+          <span v-if="hasAccess" class="text-xs text-green-600">{{ t('organize.accessGranted') }}</span>
           <button
             v-else
             class="px-3 py-1.5 rounded-lg border border-indigo-200 text-xs text-indigo-600 hover:bg-indigo-50"
             @click="grantAccess"
           >
-            授权
+            {{ t('organize.grantBtn') }}
           </button>
         </div>
 
         <!-- 四个动作 -->
         <div class="grid grid-cols-2 gap-3">
           <div class="rounded-xl bg-white border border-slate-200 p-3.5 space-y-2">
-            <p class="text-xs font-semibold">✨ 补全元数据</p>
-            <p class="text-[11px] text-slate-400 leading-relaxed">为 {{ unenhancedCount }} 条未增强书签生成摘要与标签，不改变目录</p>
+            <p class="text-xs font-semibold">{{ t('organize.kindEnhance') }}</p>
+            <p class="text-[11px] text-slate-400 leading-relaxed">{{ t('organize.enhanceDesc', { n: unenhancedCount }) }}</p>
             <label class="flex items-center gap-1.5 text-[11px] text-slate-500">
               <input type="checkbox" v-model="fetchContent" class="accent-indigo-600" :disabled="!hasAccess" />
-              抓取正文（更准，更慢）
+              {{ t('organize.fetchContent') }}
             </label>
             <button
               class="w-full py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700 disabled:opacity-40"
               :disabled="busy || !!activeJob || !unenhancedCount"
               @click="startEnhance"
             >
-              开始（{{ unenhancedCount }} 条）
+              {{ t('organize.startCount', { n: unenhancedCount }) }}
             </button>
           </div>
 
           <div class="rounded-xl bg-white border border-slate-200 p-3.5 space-y-2">
-            <p class="text-xs font-semibold">🗂 自动分类</p>
+            <p class="text-xs font-semibold">{{ t('organize.kindClassify') }}</p>
             <div class="flex gap-1.5">
               <select v-model="scope" class="flex-1 min-w-0 px-2 py-1 rounded-lg border border-slate-200 text-[11px] bg-white">
-                <option value="all">全部书签</option>
-                <option value="toolbar">仅书签栏</option>
-                <option value="other">仅其他书签</option>
+                <option value="all">{{ t('organize.scopeAll') }}</option>
+                <option value="toolbar">{{ t('organize.scopeToolbar') }}</option>
+                <option value="other">{{ t('organize.scopeOther') }}</option>
               </select>
               <select
                 v-model.number="maxDepth"
                 class="px-1.5 py-1 rounded-lg border border-slate-200 text-[11px] bg-white"
-                title="类目层级：≥2 级时 AI 生成「大类/子类」多级目录"
+                :title="t('organize.tipDepth')"
               >
-                <option :value="1">1 级</option>
-                <option :value="2">2 级</option>
-                <option :value="3">3 级</option>
+                <option :value="1">{{ t('organize.depthLevel', { n: 1 }) }}</option>
+                <option :value="2">{{ t('organize.depthLevel', { n: 2 }) }}</option>
+                <option :value="3">{{ t('organize.depthLevel', { n: 3 }) }}</option>
               </select>
-              <label class="flex items-center gap-1 text-[11px] text-slate-500" title="大类数量上限">
-                ≤{{ maxCategories }}类
+              <label class="flex items-center gap-1 text-[11px] text-slate-500" :title="t('organize.tipMaxCategories')">
+                {{ t('organize.maxCategoriesLabel', { n: maxCategories }) }}
                 <input type="range" min="6" max="20" v-model.number="maxCategories" class="w-12 accent-indigo-600" />
               </label>
             </div>
-            <p class="text-[11px] text-slate-400 leading-relaxed">AI 聚类后在原地建分类文件夹并移动，可一键撤销；跳过「AI 收藏」子树</p>
+            <p class="text-[11px] text-slate-400 leading-relaxed">{{ t('organize.classifyDesc') }}</p>
             <button
               class="w-full py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700 disabled:opacity-40"
               :disabled="busy || !!activeJob"
               @click="startClassify"
             >
-              开始分类
+              {{ t('organize.startClassify') }}
             </button>
           </div>
 
           <div class="rounded-xl bg-white border border-slate-200 p-3.5 space-y-2">
-            <p class="text-xs font-semibold">🔁 去重</p>
-            <p class="text-[11px] text-slate-400 leading-relaxed">URL 归一化 + 语义相似 + AI 确认，逐组选择保留项</p>
+            <p class="text-xs font-semibold">{{ t('organize.kindDedupe') }}</p>
+            <p class="text-[11px] text-slate-400 leading-relaxed">{{ t('organize.dedupeDesc') }}</p>
             <button
               class="w-full py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700 disabled:opacity-40"
               :disabled="busy || !!activeJob"
               @click="startDedupe"
             >
-              扫描重复
+              {{ t('organize.startDedupe') }}
             </button>
           </div>
 
           <div class="rounded-xl bg-white border border-slate-200 p-3.5 space-y-2">
-            <p class="text-xs font-semibold">💀 死链检测</p>
-            <p class="text-[11px] text-slate-400 leading-relaxed">批量探测全部书签可访问性，确认后删除（需授权）</p>
+            <p class="text-xs font-semibold">{{ t('organize.kindDeadlink') }}</p>
+            <p class="text-[11px] text-slate-400 leading-relaxed">{{ t('organize.deadlinkDesc') }}</p>
             <button
               class="w-full py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700 disabled:opacity-40"
               :disabled="busy || !!activeJob || !hasAccess"
               @click="startDeadlink"
             >
-              开始检测
+              {{ t('organize.startDeadlink') }}
             </button>
           </div>
         </div>
 
         <!-- 任务列表 -->
         <div class="space-y-3">
-          <h3 class="text-xs font-semibold text-slate-500 px-1">任务记录</h3>
+          <h3 class="text-xs font-semibold text-slate-500 px-1">{{ t('organize.historyTitle') }}</h3>
           <div v-if="!jobs.length" class="rounded-xl border border-dashed border-slate-300 p-6 text-center text-xs text-slate-400">
-            还没有整理任务
+            {{ t('organize.noJobs') }}
           </div>
 
           <div v-for="job in jobs" :key="job.id" class="rounded-xl bg-white border border-slate-200 p-3.5 space-y-2.5">
             <div class="flex items-center gap-2">
-              <span class="text-xs font-medium">{{ KIND_LABELS[job.kind] }}</span>
+              <span class="text-xs font-medium">{{ kindLabel(job.kind) }}</span>
               <button
                 v-if="job.status !== 'running' && job.status !== 'queued'"
                 class="text-slate-300 hover:text-red-500 text-xs leading-none"
-                title="删除任务记录"
+                :title="t('organize.tipDeleteJob')"
                 @click="removeJob(job)"
               >
                 ✕
@@ -487,7 +492,7 @@ onUnmounted(() => clearInterval(timer));
                   'bg-red-50 text-red-600': job.status === 'error',
                 }"
               >
-                {{ STATUS_LABELS[job.status] }}
+                {{ statusLabel(job.status) }}
               </span>
               <span class="flex-1"></span>
               <span class="text-[10px] text-slate-400 tabular-nums" v-if="job.total">
@@ -513,24 +518,24 @@ onUnmounted(() => clearInterval(timer));
               <button
                 v-if="job.status === 'paused' || job.status === 'error'"
                 class="px-2.5 py-1 rounded-lg bg-indigo-50 border border-indigo-200 text-[11px] text-indigo-600 hover:bg-indigo-100"
-                :title="job.status === 'error' ? '从当前进度继续，不重复已完成批次' : ''"
+                :title="job.status === 'error' ? t('organize.tipResumeError') : ''"
                 @click="action(job, 'resume')"
               >
-                {{ job.status === 'error' ? '继续（从进度处重试）' : '继续' }}
+                {{ job.status === 'error' ? t('organize.resumeRetry') : t('organize.resume') }}
               </button>
               <button
                 v-if="job.status === 'running' || job.status === 'queued' || job.status === 'paused'"
                 class="px-2.5 py-1 rounded-lg border border-slate-200 text-[11px] text-slate-600 hover:bg-slate-50"
                 @click="action(job, 'pause')"
               >
-                暂停
+                {{ t('organize.pause') }}
               </button>
               <button
                 v-if="job.status !== 'error'"
                 class="px-2.5 py-1 rounded-lg border border-slate-200 text-[11px] text-slate-600 hover:bg-slate-50"
                 @click="action(job, 'cancel')"
               >
-                取消
+                {{ t('common.cancel') }}
               </button>
             </div>
 
@@ -540,14 +545,14 @@ onUnmounted(() => clearInterval(timer));
               class="border-t border-slate-100 pt-2 flex items-center gap-2"
             >
               <span class="text-[11px] text-amber-600">
-                发现 {{ (job.result?.groups ?? []).length }} 组待确认
+                {{ t('organize.pendingGroups', { n: (job.result?.groups ?? []).length }) }}
               </span>
               <span class="flex-1"></span>
               <button
                 class="px-2.5 py-1 rounded-lg bg-red-500 text-white text-[11px] font-medium hover:bg-red-600"
                 @click="openReview(job)"
               >
-                去审查
+                {{ t('organize.reviewBtn') }}
               </button>
             </div>
 
@@ -557,7 +562,7 @@ onUnmounted(() => clearInterval(timer));
               class="px-2.5 py-1 rounded-lg border border-amber-200 text-[11px] text-amber-700 hover:bg-amber-50"
               @click="action(job, 'undo')"
             >
-              ↩ 撤销本次整理（{{ job.undoLog.length }} 步）
+              {{ t('organize.undoBtn', { n: job.undoLog.length }) }}
             </button>
           </div>
         </div>
@@ -572,13 +577,9 @@ onUnmounted(() => clearInterval(timer));
     >
       <div class="w-full max-w-md max-h-[80vh] rounded-xl bg-white shadow-xl flex flex-col overflow-hidden">
         <div class="px-4 pt-3.5 pb-2.5 border-b border-slate-100">
-          <p class="text-sm font-medium">{{ isDedupeReview ? '删除重复书签' : '删除死链书签' }}</p>
+          <p class="text-sm font-medium">{{ isDedupeReview ? t('organize.reviewDedupeTitle') : t('organize.reviewDeadlinkTitle') }}</p>
           <p class="mt-0.5 text-[11px] text-slate-400 leading-relaxed">
-            {{
-              isDedupeReview
-                ? '勾选 = 删除；每组默认保留第一条，取消勾选即保留，每组至少保留一条'
-                : '勾选 = 删除（默认全选），取消勾选的保留'
-            }}
+            {{ isDedupeReview ? t('organize.reviewDedupeDesc') : t('organize.reviewDeadlinkDesc') }}
           </p>
         </div>
         <div class="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3">
@@ -629,21 +630,21 @@ onUnmounted(() => clearInterval(timer));
         </div>
         <div class="px-4 py-3 border-t border-slate-100 flex items-center gap-2">
           <p v-if="invalidGroups.length" class="flex-1 text-[11px] text-red-500">
-            有 {{ invalidGroups.length }} 组全部勾选，需至少保留一条
+            {{ t('organize.invalidGroups', { n: invalidGroups.length }) }}
           </p>
-          <span v-else class="flex-1 text-[11px] text-slate-400">将删除 {{ reviewRemoveCount }} 条</span>
+          <span v-else class="flex-1 text-[11px] text-slate-400">{{ t('organize.willDelete', { n: reviewRemoveCount }) }}</span>
           <button
             class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50"
             @click="closeReview"
           >
-            取消
+            {{ t('common.cancel') }}
           </button>
           <button
             class="px-3 py-1.5 rounded-lg bg-red-500 text-white text-xs font-medium hover:bg-red-600 disabled:opacity-40"
             :disabled="busy || !reviewRemoveCount || !!invalidGroups.length"
             @click="confirmReview"
           >
-            确认删除（{{ reviewRemoveCount }}）
+            {{ t('organize.confirmDeleteCount', { n: reviewRemoveCount }) }}
           </button>
         </div>
       </div>
@@ -656,11 +657,11 @@ onUnmounted(() => clearInterval(timer));
       @click.self="confirmState = null"
     >
       <div class="w-full max-w-sm rounded-xl bg-white p-4 shadow-xl space-y-3">
-        <p class="text-sm font-medium">确认操作</p>
+        <p class="text-sm font-medium">{{ t('common.confirmTitle') }}</p>
         <p class="text-xs text-slate-600 leading-relaxed whitespace-pre-line">{{ confirmState.text }}</p>
         <div class="flex justify-end gap-2">
-          <button class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50" @click="confirmState = null">取消</button>
-          <button class="px-3 py-1.5 rounded-lg bg-red-500 text-white text-xs font-medium hover:bg-red-600" @click="runConfirm">确认</button>
+          <button class="px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50" @click="confirmState = null">{{ t('common.cancel') }}</button>
+          <button class="px-3 py-1.5 rounded-lg bg-red-500 text-white text-xs font-medium hover:bg-red-600" @click="runConfirm">{{ t('common.confirm') }}</button>
         </div>
       </div>
     </div>
@@ -674,7 +675,7 @@ onUnmounted(() => clearInterval(timer));
       <div class="w-full max-w-sm rounded-xl bg-white p-4 shadow-xl space-y-3">
         <p class="text-xs text-slate-600 leading-relaxed">{{ noticeMsg }}</p>
         <div class="flex justify-end">
-          <button class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700" @click="noticeMsg = ''">知道了</button>
+          <button class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700" @click="noticeMsg = ''">{{ t('common.gotIt') }}</button>
         </div>
       </div>
     </div>

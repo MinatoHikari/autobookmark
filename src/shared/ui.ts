@@ -1,4 +1,5 @@
 import { browser } from 'wxt/browser';
+import { rt, localeTag } from './i18n';
 
 /** PublicPath 只包含 WXT 已知的输出文件，_favicon 是 Chrome 运行时内置路径 */
 const FAVICON_BASE = '/_favicon/' as unknown as Parameters<typeof browser.runtime.getURL>[0];
@@ -23,13 +24,13 @@ export function faviconUrl(pageUrl: string, size = 32): string {
 export function formatTime(ts: number): string {
   const diff = Date.now() - ts;
   const minutes = Math.floor(diff / 60_000);
-  if (minutes < 1) return '刚刚';
-  if (minutes < 60) return `${minutes} 分钟前`;
+  if (minutes < 1) return rt('time.justNow');
+  if (minutes < 60) return rt('time.minutesAgo', { n: minutes });
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} 小时前`;
+  if (hours < 24) return rt('time.hoursAgo', { n: hours });
   const days = Math.floor(hours / 24);
-  if (days < 30) return `${days} 天前`;
-  return new Date(ts).toLocaleDateString('zh-CN');
+  if (days < 30) return rt('time.daysAgo', { n: days });
+  return new Date(ts).toLocaleDateString(localeTag());
 }
 
 export function hostOf(url: string): string {
@@ -59,4 +60,22 @@ export async function openInCurrentTab(url: string): Promise<void> {
 /** 新窗口（incognito = 无痕窗口）打开 */
 export async function openInWindow(url: string, incognito = false): Promise<void> {
   await browser.windows.create({ url, incognito });
+}
+
+/**
+ * 新标签页打开。
+ * background = 在后台打开（焦点留在当前页面）；打开方读取 openNewTabInBackground 设置后传入
+ */
+export async function openInNewTab(url: string, background = false): Promise<void> {
+  await browser.tabs.create({ url, active: !background });
+}
+
+/**
+ * 结合设置与修饰键计算后台打开：
+ * 设置为开 → 默认后台；按住 Ctrl/Cmd 时取反为前台。
+ * 设置为关 → 默认前台；按住 Ctrl/Cmd 时取反为后台。
+ */
+export function backgroundOpen(inBackground: boolean | undefined, e?: MouseEvent): boolean {
+  const base = inBackground ?? false;
+  return e?.ctrlKey || e?.metaKey ? !base : base;
 }

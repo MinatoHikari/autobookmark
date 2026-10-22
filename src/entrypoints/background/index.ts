@@ -1,5 +1,6 @@
 import { browser } from 'wxt/browser';
 import { onMessage } from '../../shared/messages';
+import { rt } from '../../shared/i18n';
 import { STREAM_PORT, type StreamEvent, type StreamRequest } from '../../shared/stream';
 import type { BookmarkMeta, PageContent } from '../../shared/types';
 import { getSettings, saveSettings } from '../../core/storage/settings';
@@ -47,7 +48,7 @@ const MANAGER_URL = 'manager.html' as Parameters<typeof browser.runtime.getURL>[
 export async function extractPageContent(tabId: number): Promise<PageContent> {
   const tab = await browser.tabs.get(tabId);
   if (!tab.url || !/^https?:/i.test(tab.url)) {
-    throw new Error('浏览器内部页面（chrome:// 等）暂不支持收藏');
+    throw new Error(rt('err.internalPage'));
   }
   try {
     await browser.scripting.executeScript({
@@ -55,7 +56,7 @@ export async function extractPageContent(tabId: number): Promise<PageContent> {
       files: [EXTRACTOR_FILE],
     });
   } catch {
-    throw new Error('无法注入此页面（可能是商店/系统页面），请换个页面试试');
+    throw new Error(rt('err.cannotInject'));
   }
   const [res] = await browser.scripting.executeScript({
     target: { tabId },
@@ -66,7 +67,7 @@ export async function extractPageContent(tabId: number): Promise<PageContent> {
     },
   });
   const page = res?.result as PageContent | undefined;
-  if (!page || !page.url) throw new Error('正文提取失败');
+  if (!page || !page.url) throw new Error(rt('err.extractFailed'));
   return page;
 }
 
@@ -83,7 +84,7 @@ async function contextMenuSave(tabId: number | undefined) {
   if (!tabId) return;
   try {
     const settings = await getSettings();
-    if (!settings.bindings.enhance) throw new NotConfiguredError('智能收藏');
+    if (!settings.bindings.enhance) throw new NotConfiguredError('enhance');
     const page = await extractPageContent(tabId);
     const draft = await enhanceBookmark(settings, page);
     await saveEnhancedBookmark(settings, page, draft);
@@ -102,7 +103,7 @@ function setupContextMenus() {
       if (!settings.preferences.contextMenuEnabled) return;
       browser.contextMenus.create({
         id: CONTEXT_MENU_ID,
-        title: 'AI 智能收藏此页面',
+        title: rt('ctx.aiSavePage'),
         contexts: ['page'],
       });
     });
@@ -206,7 +207,7 @@ function setupMessageRouter() {
     if (data.preferences.contextMenuEnabled) {
       browser.contextMenus.create({
         id: CONTEXT_MENU_ID,
-        title: 'AI 智能收藏此页面',
+        title: rt('ctx.aiSavePage'),
         contexts: ['page'],
       });
     }
@@ -363,7 +364,7 @@ function setupMessageRouter() {
     if (data.title !== undefined && data.title.trim()) next.title = data.title.trim();
     if (data.url !== undefined && data.url.trim() && data.url.trim() !== base.url) {
       const newUrl = data.url.trim();
-      if (!/^https?:\/\//i.test(newUrl)) throw new Error('链接必须以 http:// 或 https:// 开头');
+      if (!/^https?:\/\//i.test(newUrl)) throw new Error(rt('common.errorUrlProtocol'));
       await browser.bookmarks.update(data.bookmarkId, { url: newUrl });
       next.url = newUrl;
       next.urlHash = await hashUrl(newUrl);
@@ -423,7 +424,7 @@ function setupMessageRouter() {
   // ---- 书签结构备份 ----
   onMessage('listBackups', async () => listBackups());
   onMessage('createBackupNow', async ({ data }) => {
-    const id = await createSnapshot(data || '手动备份');
+    const id = await createSnapshot(data || rt('organize.snapshotManual'));
     invalidateSearchIndex();
     return id;
   });

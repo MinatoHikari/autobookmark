@@ -4,8 +4,11 @@ import type { MetaBrief, TreeNodeDto } from '../../../shared/types';
 import { sendMessage } from '../../../shared/messages';
 import { beginRowDrag, shouldSuppressClick } from '../../../shared/dnd';
 import { formatTime } from '../../../shared/ui';
+import { useI18n } from '../../../shared/i18n';
 import FaviconImg from '../../../components/FaviconImg.vue';
 import MetaEditDialog from '../../../components/MetaEditDialog.vue';
+
+const t = useI18n();
 
 const props = defineProps<{
   folder: TreeNodeDto | null;
@@ -14,7 +17,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  open: [url: string];
+  open: [url: string, e?: MouseEvent];
   openFolder: [node: TreeNodeDto];
   enhance: [ids: string[]];
   metaChanged: [];
@@ -62,9 +65,9 @@ function openFolder(folder: TreeNodeDto) {
   emit('openFolder', folder);
 }
 
-function openUrl(node: TreeNodeDto) {
+function openUrl(node: TreeNodeDto, e?: MouseEvent) {
   if (shouldSuppressClick()) return;
-  emit('open', node.url ?? '');
+  emit('open', node.url ?? '', e);
 }
 
 async function enhanceChecked() {
@@ -101,13 +104,13 @@ async function enhanceOne(id: string) {
       v-if="checked.size"
       class="sticky top-0 z-10 flex items-center gap-2 px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm shadow"
     >
-      <span>已选 {{ checked.size }} 项</span>
+      <span>{{ t('bookmarkList.selectedCount', { n: checked.size }) }}</span>
       <span class="flex-1"></span>
       <button class="px-2.5 py-1 rounded bg-white/15 hover:bg-white/25" @click="enhanceChecked">
-        ✨ AI 增强 ({{ checked.size }})
+        {{ t('bookmarkList.enhanceCheckedBtn', { n: checked.size }) }}
       </button>
       <button class="px-2.5 py-1 rounded bg-white/15 hover:bg-white/25" @click="checked = new Set()">
-        取消选择
+        {{ t('bookmarkList.clearSelection') }}
       </button>
     </div>
 
@@ -127,7 +130,7 @@ async function enhanceOne(id: string) {
         @change="toggleCheck(node.id)"
       />
       <FaviconImg :url="node.url ?? ''" class="w-4 h-4 mt-1 rounded" loading="lazy" />
-      <div class="min-w-0 flex-1 cursor-pointer" @click="openUrl(node)">
+      <div class="min-w-0 flex-1 cursor-pointer" @click="openUrl(node, $event)">
         <div class="flex items-center gap-1.5 flex-wrap">
           <h3 class="text-sm font-medium leading-snug break-words group-hover:text-indigo-700 transition-colors">
             {{ node.title }}
@@ -135,9 +138,9 @@ async function enhanceOne(id: string) {
           <span
             v-if="!isEnhanced(node.id)"
             class="text-[10px] px-1.5 py-px rounded bg-amber-50 text-amber-600 border border-amber-200"
-            >未增强</span
+            >{{ t('bookmarkList.notEnhancedBadge') }}</span
           >
-          <span v-if="busyIds.has(node.id)" class="text-[10px] text-indigo-500 animate-pulse">AI 处理中…</span>
+          <span v-if="busyIds.has(node.id)" class="text-[10px] text-indigo-500 animate-pulse">{{ t('bookmarkList.processing') }}</span>
         </div>
         <p v-if="metaById[node.id]?.summary" class="mt-1 text-xs text-slate-600 leading-relaxed line-clamp-2">
           {{ metaById[node.id]!.summary }}
@@ -159,7 +162,7 @@ async function enhanceOne(id: string) {
       <div class="shrink-0 flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
         <button
           class="p-1.5 rounded-md text-slate-400 hover:bg-slate-100 hover:text-indigo-600"
-          title="AI 增强 / 编辑元数据"
+          :title="t('bookmarkList.tipEnhanceOrEdit')"
           @click="isEnhanced(node.id) ? startEdit(node) : enhanceOne(node.id)"
         >
           ✨
@@ -167,7 +170,7 @@ async function enhanceOne(id: string) {
         <button
           v-if="isEnhanced(node.id)"
           class="p-1.5 rounded-md text-slate-400 hover:bg-slate-100 hover:text-indigo-600"
-          title="编辑"
+          :title="t('common.edit')"
           @click="startEdit(node)"
         >
           ✎
@@ -175,7 +178,7 @@ async function enhanceOne(id: string) {
         <button
           class="p-1.5 rounded-md text-sm"
           :class="deleteConfirmId === node.id ? 'text-red-600 bg-red-50' : 'text-slate-400 hover:bg-slate-100 hover:text-red-500'"
-          :title="deleteConfirmId === node.id ? '再点一次确认删除' : '删除'"
+          :title="deleteConfirmId === node.id ? t('bookmarkList.tipConfirmDelete') : t('common.delete')"
           @click="removeItem(node.id)"
         >
           🗑
@@ -184,7 +187,7 @@ async function enhanceOne(id: string) {
     </div>
 
     <div v-if="!bookmarks.length && !folders.length" class="py-16 text-center text-sm text-slate-400">
-      此文件夹为空
+      {{ t('bookmarkList.emptyFolder') }}
     </div>
 
     <!-- 元数据编辑弹层（共享组件） -->

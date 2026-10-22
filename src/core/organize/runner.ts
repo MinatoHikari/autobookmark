@@ -10,10 +10,18 @@ import { processDeadlinkBatch, type DeadlinkParams } from './deadlink';
 import { flattenBookmarks, getTreeDtos } from './scan';
 import { createSnapshot } from './backup';
 import { notifyJobTerminal, shouldNotify } from './notify';
+import { rt, type I18nKey } from '../../shared/i18n';
 
 const ALARM_NAME = 'organize-tick';
 /** SW 每次唤醒最多连续处理的批数，余下交给 alarm 兜底 */
 const MAX_BATCHES_PER_WAKE = 8;
+
+const KIND_KEYS: Record<OrganizeJob['kind'], I18nKey> = {
+  enhance: 'notify.kindEnhance',
+  classify: 'notify.kindClassify',
+  dedupe: 'notify.kindDedupe',
+  deadlink: 'notify.kindDeadlink',
+};
 
 let ticking = false;
 
@@ -44,7 +52,7 @@ export async function startJob(
   // 同时只允许一个活动任务，避免 AI 并发爆限额
   const existing = await listJobs();
   if (existing.some(isActive)) {
-    throw new Error('已有任务在进行中，请等它完成或先暂停/取消');
+    throw new Error(rt('organize.errJobRunning'));
   }
 
   const job: OrganizeJob = {
@@ -60,14 +68,8 @@ export async function startJob(
   };
 
   // 破坏性任务（改变结构/删除书签）启动前自动快照
-  const KIND_LABELS: Record<OrganizeJob['kind'], string> = {
-    enhance: '补全元数据',
-    classify: '自动分类',
-    dedupe: '去重',
-    deadlink: '死链检测',
-  };
   if (kind !== 'enhance') {
-    await createSnapshot(`整理前自动备份 · ${KIND_LABELS[kind]}`);
+    await createSnapshot(rt('organize.snapshotBeforeOrganize', { kind: rt(KIND_KEYS[kind]) }));
   }
 
   // 准备阶段：确定 total 与参数规范化
@@ -175,8 +177,8 @@ async function runOneBatch(job: OrganizeJob): Promise<void> {
       const skipped = (job.params as unknown as EnhanceParams).skipped ?? 0;
       job.result = {
         report: [
-          `已为 ${job.done - skipped} 条书签补全元数据`,
-          ...(skipped ? [`${skipped} 条调用失败被跳过，可重跑本任务补全`] : []),
+          rt('organize.reportEnhanced', { n: job.done - skipped }),
+          ...(skipped ? [rt('organize.reportEnhanceSkipped', { n: skipped })] : []),
         ],
       };
       job.status = 'done';
@@ -224,7 +226,7 @@ export async function resumeJob(jobId: string): Promise<boolean> {
 export async function deleteJob(jobId: string): Promise<boolean> {
   const job = await getJob(jobId);
   if (!job) return false;
-  if (isActive(job)) throw new Error('任务进行中，请先暂停或取消再删除');
+  if (isActive(job)) throw new Error(rt('organize.errJobActive'));
   await deleteJobById(jobId);
   return true;
 }
@@ -299,7 +301,7 @@ export async function undoJob(jobId: string): Promise<boolean> {
   if (!job || job.status === 'undone') return false;
   if (!job.undoLog.length) return false;
 
-  await createSnapshot('撤销前自动备份').catch(() => undefined);
+  await createSnapshot(rt('organize.snapshotBeforeUndo')).catch(() => undefined);
 
   const idMap = new Map<string, string>();
   const resolveParent = (pid: string): string => {

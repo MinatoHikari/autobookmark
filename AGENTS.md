@@ -48,3 +48,4 @@ node scripts/smoke.mjs # 端到端冒烟测试（内置 mock OpenAI server，无
 - `.output/autobookmark-<version>-chrome.zip` — 存档/商店上传
 
 扩展 ID 已通过 manifest `key` 固化，重建/换路径加载不丢用户数据。
+注意：CWS 拒收含 `key` 的上传包，商店 zip 由 `wxt.config.ts` 的 `zip:extension:*` 钩子在打包时自动剔除 `key`（本地加载目录不受影响）；冒烟测试会校验「zip 无 key、目录有 key」。

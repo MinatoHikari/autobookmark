@@ -1,4 +1,5 @@
 import { browser } from 'wxt/browser';
+import { rt } from '../../shared/i18n';
 import { AiClientError, type ChatMessage } from '../providers/client';
 import { resolveBinding } from './enhance';
 import { getTreeDtos, listFolderPaths, flattenBookmarks, type FlatBookmark } from '../organize/scan';
@@ -289,7 +290,7 @@ async function executeTool(
 // ---------- 系统提示词 ----------
 
 function systemPrompt(settings: Settings): string {
-  const lang = settings.preferences.language === 'en' ? 'English' : '中文';
+  const lang = settings.preferences.language === 'en' ? 'English' : settings.preferences.language === 'ja' ? '日本語' : '中文';
   return [
     '你是浏览器扩展 AutoBookmark 的书签库管理助手，可以调用工具查看和操作用户的书签。',
     `始终用${lang}回复。`,
@@ -334,7 +335,7 @@ export async function runAgentTurn(
       });
     } catch (e) {
       if (e instanceof AiClientError && /tools|function/i.test(e.detail ?? '')) {
-        throw new Error('当前模型可能不支持 Function Calling，请在设置 → 任务绑定为「对话助手」换一个支持的模型');
+        throw new Error(rt('err.noFunctionCalling'));
       }
       throw e;
     }
@@ -367,7 +368,7 @@ export async function runAgentTurn(
       } catch {
         args = {};
       }
-      emit({ type: 'tool', name: call.function.name, detail: '执行中…' });
+      emit({ type: 'tool', name: call.function.name, detail: rt('agent.running') });
       let result: string;
       try {
         result = await executeTool(settings, call.function.name, args, emit);
@@ -386,7 +387,7 @@ export async function runAgentTurn(
 
   const limitMsg: ChatMessage = {
     role: 'assistant',
-    content: '（达到单轮工具调用上限，请继续对话或换个更简单的指令）',
+    content: rt('agent.limitReached'),
   };
   messages.push(limitMsg);
   newMessages.push(limitMsg);

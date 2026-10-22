@@ -1,4 +1,5 @@
 import { browser } from 'wxt/browser';
+import { rt } from '../../shared/i18n';
 import type { BookmarkDraft, BookmarkMeta, PageContent } from '../../shared/types';
 import type { Settings } from '../storage/settings';
 import { hashUrl, putMeta } from '../storage/db';
@@ -55,7 +56,7 @@ export async function resolveFolderPath(path: string): Promise<string> {
     sections.find((c) => c.title === first) ??
     sections.find((c) => c.id === '2') ??
     sections[sections.length - 1];
-  if (!section) throw new Error('未找到可存放的根目录');
+  if (!section) throw new Error(rt('err.noRootSection'));
   let parentId = section.id;
   for (const seg of segments.slice(1)) {
     parentId = (await ensureFolder(parentId, seg)).id;
@@ -175,7 +176,7 @@ export async function savePlainBookmark(
     const section =
       realRoot?.children?.find((c) => c.id === '2') ??
       realRoot?.children?.[realRoot.children.length - 1];
-    if (!section) throw new Error('未找到可存放的根目录');
+    if (!section) throw new Error(rt('err.noRootSection'));
     parentId = section.id;
   } else {
     parentId = await ensureRootFolder(settings.preferences.rootFolder);

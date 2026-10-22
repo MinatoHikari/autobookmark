@@ -2,6 +2,9 @@
 import { reactive, ref, watch } from 'vue';
 import type { MetaBrief, TreeNodeDto } from '../shared/types';
 import { sendMessage } from '../shared/messages';
+import { useI18n } from '../shared/i18n';
+
+const t = useI18n();
 
 const props = defineProps<{
   /** null 时隐藏 */
@@ -31,24 +34,24 @@ watch(
 );
 
 function addTag() {
-  const t = form.newTag.trim().replace(/^#/, '').replace(/\s+/g, '-').toLowerCase();
-  if (t && !form.tags.includes(t)) form.tags.push(t);
+  const tag = form.newTag.trim().replace(/^#/, '').replace(/\s+/g, '-').toLowerCase();
+  if (tag && !form.tags.includes(tag)) form.tags.push(tag);
   form.newTag = '';
 }
 
 function removeTag(tag: string) {
-  form.tags = form.tags.filter((t) => t !== tag);
+  form.tags = form.tags.filter((x) => x !== tag);
 }
 
 async function save() {
   if (!props.node) return;
   if (!form.title.trim()) {
-    errorMsg.value = '标题不能为空';
+    errorMsg.value = t('common.errorTitleRequired');
     return;
   }
   const url = form.url.trim();
   if (url && !/^https?:\/\//i.test(url)) {
-    errorMsg.value = '链接必须以 http:// 或 https:// 开头';
+    errorMsg.value = t('common.errorUrlProtocol');
     return;
   }
   saving.value = true;
@@ -89,9 +92,9 @@ async function save() {
   >
     <div class="w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl space-y-3">
       <div class="flex items-center gap-2">
-        <h3 class="text-sm font-semibold">编辑书签</h3>
+        <h3 class="text-sm font-semibold">{{ t('metaEdit.title') }}</h3>
         <span v-if="!meta" class="text-[10px] px-1.5 py-px rounded bg-amber-50 text-amber-600 border border-amber-200">
-          未增强 · 保存后将创建元数据
+          {{ t('metaEdit.notEnhancedBadge') }}
         </span>
         <span class="flex-1"></span>
         <button class="text-slate-400 hover:text-slate-600 text-sm leading-none" @click="emit('close')">×</button>
@@ -100,14 +103,14 @@ async function save() {
       <p v-if="errorMsg" class="px-2.5 py-1.5 rounded-lg bg-red-50 text-red-600 text-xs">{{ errorMsg }}</p>
 
       <label class="block">
-        <span class="text-xs font-medium text-slate-500">书签标题</span>
+        <span class="text-xs font-medium text-slate-500">{{ t('metaEdit.titleLabel') }}</span>
         <input
           v-model="form.title"
           class="mt-1 w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
         />
       </label>
       <label class="block">
-        <span class="text-xs font-medium text-slate-500">链接</span>
+        <span class="text-xs font-medium text-slate-500">{{ t('metaEdit.urlLabel') }}</span>
         <input
           v-model="form.url"
           spellcheck="false"
@@ -115,16 +118,16 @@ async function save() {
         />
       </label>
       <label class="block">
-        <span class="text-xs font-medium text-slate-500">AI 摘要</span>
+        <span class="text-xs font-medium text-slate-500">{{ t('metaEdit.summaryLabel') }}</span>
         <textarea
           v-model="form.summary"
           rows="3"
-          placeholder="留空则不生成摘要（可用 ✨ AI 增强自动生成）"
+          :placeholder="t('metaEdit.summaryPlaceholder')"
           class="mt-1 w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs leading-relaxed resize-none focus:outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
         ></textarea>
       </label>
       <div>
-        <span class="text-xs font-medium text-slate-500">标签</span>
+        <span class="text-xs font-medium text-slate-500">{{ t('common.tags') }}</span>
         <div class="mt-1 flex flex-wrap gap-1">
           <span
             v-for="tag in form.tags"
@@ -137,7 +140,7 @@ async function save() {
         </div>
         <input
           v-model="form.newTag"
-          placeholder="回车添加标签"
+          :placeholder="t('common.tagInputPlaceholder')"
           class="mt-1.5 w-full px-2.5 py-1 rounded-lg border border-dashed border-slate-300 text-xs focus:outline-none focus:border-indigo-400"
           @keydown.enter.prevent="addTag"
         />
@@ -148,14 +151,14 @@ async function save() {
           class="px-4 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50"
           @click="emit('close')"
         >
-          取消
+          {{ t('common.cancel') }}
         </button>
         <button
           class="px-4 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700 disabled:opacity-50"
           :disabled="saving"
           @click="save"
         >
-          {{ saving ? '保存中…' : '保存' }}
+          {{ saving ? t('common.saving') : t('common.save') }}
         </button>
       </div>
     </div>
